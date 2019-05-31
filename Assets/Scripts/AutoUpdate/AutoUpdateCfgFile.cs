@@ -1,7 +1,10 @@
+#define _UpdateCfgBinary
+
 using System;
 using System.IO;
 using System.Collections;
 using System.Collections.Generic;
+using Utils;
 
 namespace AutoUpdate
 {
@@ -11,6 +14,31 @@ namespace AutoUpdate
 		public string fileContentMd5;
 		public long readBytes;
 		public bool isDone;
+
+		public static AutoUpdateCfgItem LoadBinary(Stream stream)
+		{
+			AutoUpdateCfgItem ret = new AutoUpdateCfgItem();
+			ret.fileContentMd5 = FilePathMgr.Instance.ReadString(stream);
+			ret.readBytes = FilePathMgr.Instance.ReadLong(stream);
+			ret.isDone = FilePathMgr.Instance.ReadBool(stream);
+			return ret;
+		}
+
+		public bool SaveBinary(Stream stream)
+		{
+			if (stream == null)
+				return false;
+			bool ret = FilePathMgr.Instance.WriteString(stream, fileContentMd5);
+			if (!ret)
+				return ret;
+			ret = FilePathMgr.Instance.WriteLong(stream, readBytes);
+			if (!ret)
+				return ret;
+			ret = FilePathMgr.Instance.WriteBool(stream, isDone);
+			if (!ret)
+				return ret;
+			return ret;
+		}
 	}
 
 	// update.txt
@@ -35,6 +63,49 @@ namespace AutoUpdate
 
 			Clear();
 		}
+			
+		public bool RemoveDowningZipFiles(string noDeleteZipFile)
+		{
+			if (!string.IsNullOrEmpty(noDeleteZipFile))
+			{
+				if (!noDeleteZipFile.EndsWith(".zip", StringComparison.CurrentCultureIgnoreCase))
+					noDeleteZipFile += ".zip";
+			}
+
+			string writePath = AutoUpdateMgr.Instance.WritePath;
+			if (string.IsNullOrEmpty(writePath))
+				return false;
+
+			List<string> delKeyList = null;
+			Dictionary<string, AutoUpdateCfgItem>.Enumerator iter = m_Dict.GetEnumerator();
+			while (iter.MoveNext())
+			{
+				if (string.Compare(iter.Current.Value.fileContentMd5, noDeleteZipFile) == 0)
+					continue;
+				
+				string fileName = string.Format("{0}/{1}", writePath, iter.Current.Value.fileContentMd5);
+				if (File.Exists(fileName))
+					File.Delete(fileName);
+
+				if (delKeyList == null)
+					delKeyList = new List<string>();
+				delKeyList.Add(iter.Current.Key);
+			}
+			iter.Dispose();
+
+			bool isChg = false;
+			if (delKeyList != null && delKeyList.Count > 0)
+			{
+				isChg = true;
+				for (int i = 0; i < delKeyList.Count; ++i)
+				{
+					string key = delKeyList[i];
+					m_Dict.Remove(key);
+				}
+			}
+
+			return isChg;
+		}
 
 		public bool LoadFromFile(string fileName)
 		{
@@ -44,10 +115,14 @@ namespace AutoUpdate
 			FileStream stream = new FileStream(fileName, FileMode.Open, FileAccess.Read);
 			try
 			{
+				#if _UpdateCfgBinary
+				LoadBinary(stream);
+				#else
 				byte[] src = new byte[stream.Length];
 				stream.Read(src, 0, src.Length);
 				string str = System.Text.Encoding.ASCII.GetString(src);
 				Load (str);
+				#endif
 			} finally
 			{
 				stream.Close();
@@ -96,6 +171,18 @@ namespace AutoUpdate
 		public Dictionary<string, AutoUpdateCfgItem>.Enumerator GetIter()
 		{
 			return m_Dict.GetEnumerator();
+		}
+
+		public void LoadBinary(Stream stream)
+		{
+			if (stream == null)
+				return;
+			int cnt = FilePathMgr.Instance.ReadInt(stream);
+			for (int i = 0; i < cnt; ++i)
+			{
+				AutoUpdateCfgItem item = AutoUpdateCfgItem.LoadBinary(stream);
+				AddOrSet(item);
+			}
 		}
 
 		public void Load(string str)
@@ -258,6 +345,23 @@ namespace AutoUpdate
 			FileStream stream = new FileStream(m_SaveFileName, FileMode.Create, FileAccess.Write);
 			try
 			{
+				#if _UpdateCfgBinary
+				int writeItemCnt = 0;
+				Dictionary<string, AutoUpdateCfgItem>.Enumerator iter = m_Dict.GetEnumerator();
+				FilePathMgr.Instance.WriteInt(stream, m_Dict.Count);
+				while (iter.MoveNext())
+				{
+					iter.Current.Value.SaveBinary(stream);
+					++writeItemCnt;
+					if (writeItemCnt > 50)
+					{
+						writeItemCnt = 0;
+						stream.Flush();
+					}
+				}
+				iter.Dispose();
+				#else
+				int writeBytes = 0;
 				Dictionary<string, AutoUpdateCfgItem>.Enumerator iter = m_Dict.GetEnumerator();
 				while (iter.MoveNext())
 				{
@@ -265,9 +369,16 @@ namespace AutoUpdate
 					                         iter.Current.Value.readBytes, 
 					                         iter.Current.Value.isDone.ToString());
 					byte[] dst = System.Text.Encoding.ASCII.GetBytes(s);
-					stream.Write(dst, 0, dst.Length);                        
+					stream.Write(dst, 0, dst.Length);     
+					writeBytes += dst.Length;
+					if (writeBytes > 2048)
+					{
+						writeBytes = 0;
+						stream.Flush();
+					}
 				}
 				iter.Dispose();
+				#endif
 			} finally
 			{
 				stream.Close();

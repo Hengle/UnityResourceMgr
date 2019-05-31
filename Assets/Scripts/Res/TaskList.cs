@@ -4,6 +4,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using Utils;
 
 // 任务接口
 public abstract class ITask
@@ -101,12 +102,12 @@ public abstract class ITask
 	private TaskList mOwner = null;
 }
 
-#if UNITY_5_3 || UNITY_5_4
+#if UNITY_5_3 || UNITY_5_4 || UNITY_5_5 || UNITY_5_6 || UNITY_2018
 
 // LoadFromFileAsync
 public class BundleCreateAsyncTask: ITask
 {
-	public BundleCreateAsyncTask(string createFileName)
+	public BundleCreateAsyncTask(string createFileName, int priority = 0)
 	{
 		if (string.IsNullOrEmpty(createFileName))
 		{
@@ -115,6 +116,7 @@ public class BundleCreateAsyncTask: ITask
 		}
 
 		m_FileName = createFileName;
+		m_Priority = priority;
 	}
 
 	public BundleCreateAsyncTask()
@@ -125,20 +127,35 @@ public class BundleCreateAsyncTask: ITask
 		return m_Pool.Count;
 	}
 
-	public static BundleCreateAsyncTask Create(string createFileName)
+	public static BundleCreateAsyncTask Create(string createFileName, int priority = 0)
 	{
 		if (string.IsNullOrEmpty(createFileName))
 			return null;
 		BundleCreateAsyncTask ret = GetNewTask();
 		ret.m_FileName = createFileName;
+		ret.m_Priority = priority;
 		return ret;
 	}
 
-	public static BundleCreateAsyncTask LoadFileAtStreamingAssetsPath(string fileName, bool usePlatform)
+	public static BundleCreateAsyncTask LoadFileAtStreamingAssetsPath(string fileName, bool usePlatform, int priority = 0)
 	{
 		fileName = WWWFileLoadTask.GetStreamingAssetsPath(usePlatform, true) + "/" + fileName;
-		BundleCreateAsyncTask ret = new BundleCreateAsyncTask(fileName);
+		BundleCreateAsyncTask ret = Create(fileName, priority);
 		return ret;
+	}
+
+	public AssetBundle StartLoad()
+	{
+		if (m_Req == null)
+		{
+			m_Req = AssetBundle.LoadFromFileAsync(m_FileName);
+            if (m_Req != null) {
+                m_Req.priority = m_Priority;
+                return m_Req.assetBundle;
+            }
+		}
+
+        return null;
 	}
 
 	public override void Release()
@@ -150,10 +167,8 @@ public class BundleCreateAsyncTask: ITask
 
 	public override void Process()
 	{
-		if (m_Req == null)
-		{
-			m_Req = AssetBundle.LoadFromFileAsync(m_FileName);
-		}
+		// 可以加载后面的LOAD
+		//StartLoad();
 
 		if (m_Req == null)
 		{
@@ -242,6 +257,7 @@ public class BundleCreateAsyncTask: ITask
 		m_Bundle = null;
 		m_Progress = 0;
 		m_FileName = string.Empty;
+		m_Priority = 0;
 		mResult = 0;
 		UserData = null;
 		_Owner = null;
@@ -263,6 +279,7 @@ public class BundleCreateAsyncTask: ITask
 	}
 
 	private string m_FileName = string.Empty;
+	private int m_Priority = 0;
 	private AssetBundleCreateRequest m_Req = null;
 	private float m_Progress = 0;
 	private AssetBundle m_Bundle = null;
@@ -280,7 +297,7 @@ public class BundleCreateAsyncTask: ITask
 public class WWWFileLoadTask: ITask
 {
 	// 注意：必须是WWW支持的文件名 PC上需要加 file:///
-	public WWWFileLoadTask(string wwwFileName)
+	public WWWFileLoadTask(string wwwFileName, ThreadPriority priority = ThreadPriority.Normal)
 	{
 		if (string.IsNullOrEmpty(wwwFileName)) {
 			TaskFail();
@@ -288,40 +305,111 @@ public class WWWFileLoadTask: ITask
 		}
 
 		mWWWFileName = wwwFileName;
+		mPriority = priority;
 	}
 
 	public WWWFileLoadTask()
 	{}
 
-	public static WWWFileLoadTask Create(string wwwFileName)
+    // 是否使用LoadFromCacheOrDownload
+    public bool IsUsedCached {
+        get;
+        set;
+    }
+
+	public static WWWFileLoadTask Create(string wwwFileName, ThreadPriority priority = ThreadPriority.Normal)
 	{
 		if (string.IsNullOrEmpty(wwwFileName))
 			return null;
 		WWWFileLoadTask ret = GetNewTask();
 		ret.mWWWFileName = wwwFileName;
+		ret.mPriority = priority;
 		return ret;
 	}
 
 	
 	// 传入为普通文件名(推荐使用这个函数)
-	public static WWWFileLoadTask LoadFileName(string fileName)
+	public static WWWFileLoadTask LoadFileName(string fileName, ThreadPriority priority = ThreadPriority.Normal)
 	{
 		string wwwFileName = ConvertToWWWFileName(fileName);
-		WWWFileLoadTask ret = Create(wwwFileName);
+		WWWFileLoadTask ret = Create(wwwFileName, priority);
 		return ret;
 	}
 	
 	// 读取StreamingAssets目录下的文件，只需要相对于StreamingAssets的路径即可(推荐使用这个函数)
-	public static WWWFileLoadTask LoadFileAtStreamingAssetsPath(string fileName, bool usePlatform)
+	public static WWWFileLoadTask LoadFileAtStreamingAssetsPath(string fileName, bool usePlatform,  ThreadPriority priority = ThreadPriority.Normal)
 	{
 		fileName = GetStreamingAssetsPath(usePlatform) + "/" + fileName;
-		WWWFileLoadTask ret = LoadFileName(fileName);
+		WWWFileLoadTask ret = LoadFileName(fileName, priority);
 		return ret;
 	}
 
+    private class StreamingAssetsPathComparser : StructComparser<StreamingAssetsPathKey> { }
+
+    // 优化GetStreamingAssetsPath
+    // StreamingAssets的Path的Key
+    private struct StreamingAssetsPathKey: IEquatable<StreamingAssetsPathKey> {
+        public bool usePlatform {
+            get;
+            set;
+        }
+
+        public bool isUseABCreateFromFile {
+            get;
+            set;
+        }
+
+        public bool Equals(StreamingAssetsPathKey other) {
+            return this == other;
+        }
+
+        public override bool Equals(object obj) {
+            if (obj == null)
+                return false;
+
+            if (GetType() != obj.GetType())
+                return false;
+
+            if (obj is StreamingAssetsPathKey) {
+                StreamingAssetsPathKey other = (StreamingAssetsPathKey)obj;
+                return Equals(other);
+            } else
+                return false;
+
+        }
+
+        public override int GetHashCode() {
+            int ret = FilePathMgr.InitHashValue();
+            FilePathMgr.HashCode(ref ret, usePlatform);
+            FilePathMgr.HashCode(ref ret, isUseABCreateFromFile);
+            return ret;
+        }
+
+        public static bool operator ==(StreamingAssetsPathKey a, StreamingAssetsPathKey b) {
+            return (a.usePlatform == b.usePlatform) && (a.isUseABCreateFromFile == b.isUseABCreateFromFile);
+        }
+
+        public static bool operator !=(StreamingAssetsPathKey a, StreamingAssetsPathKey b) {
+            return !(a == b);
+        }
+    }
+
+    // 优化StreamingAssetsPath
+    private static Dictionary<StreamingAssetsPathKey, string> m_StreamingAssetsPathMap = 
+                 new Dictionary<StreamingAssetsPathKey, string>(StreamingAssetsPathComparser.Default);
+
 	public static string GetStreamingAssetsPath(bool usePlatform, bool isUseABCreateFromFile = false)
 	{
-		string ret = string.Empty;
+        // 优化StreamingAssetsPath
+        StreamingAssetsPathKey key = new StreamingAssetsPathKey();
+        key.usePlatform = usePlatform;
+        key.isUseABCreateFromFile = isUseABCreateFromFile;
+
+        string ret;
+        if (m_StreamingAssetsPathMap.TryGetValue(key, out ret))
+            return ret;
+
+        ret = string.Empty;
 		switch (Application.platform)
 		{
 			case RuntimePlatform.OSXPlayer:
@@ -339,14 +427,20 @@ public class WWWFileLoadTask: ITask
                 {
 #if UNITY_EDITOR
                     var target = UnityEditor.EditorUserBuildSettings.activeBuildTarget;
-                    if (target == UnityEditor.BuildTarget.StandaloneOSXIntel || 
-                        target == UnityEditor.BuildTarget.StandaloneOSXIntel64 || 
-                        target == UnityEditor.BuildTarget.StandaloneOSXUniversal)
-                        ret += "/Mac";
-                    else if (target == UnityEditor.BuildTarget.Android)
-                        ret += "/Android";
-                    else if (target == UnityEditor.BuildTarget.iOS)
-                        ret += "/IOS";
+                        if (target == UnityEditor.BuildTarget.StandaloneOSXIntel ||
+                            target == UnityEditor.BuildTarget.StandaloneOSXIntel64 ||
+#if UNITY_2018
+                            target == UnityEditor.BuildTarget.StandaloneOSX)
+#else
+							target == UnityEditor.BuildTarget.StandaloneOSXUniversal)
+#endif
+                            ret += "/Mac";
+                        else if (target == UnityEditor.BuildTarget.Android)
+                            ret += "/Android";
+                        else if (target == UnityEditor.BuildTarget.iOS)
+                            ret += "/IOS";
+                        else if (target == UnityEditor.BuildTarget.StandaloneWindows || target == UnityEditor.BuildTarget.StandaloneWindows64)
+                            ret += "/Windows";
 #else
 					ret += "/Mac";
 #endif
@@ -400,8 +494,11 @@ public class WWWFileLoadTask: ITask
 				ret = Application.streamingAssetsPath;
 				break;
 		}
-		
-		return ret;
+
+        m_StreamingAssetsPathMap.Add(key, ret);
+
+
+        return ret;
 	}
 	
 	// 普通文件名转WWW文件名
@@ -426,6 +523,9 @@ public class WWWFileLoadTask: ITask
 			case RuntimePlatform.WindowsPlayer:
 				ret = "file:///" + ret; 
 				break;
+			case RuntimePlatform.IPhonePlayer:
+                ret = "file:///" + ret;
+                break;
 			case RuntimePlatform.Android:
 				ret = ret.Replace("/jar:file:/", "jar:file:///");
 				break;
@@ -443,7 +543,12 @@ public class WWWFileLoadTask: ITask
 	public override void Process()
 	{
 		if (mLoader == null) {
-			mLoader = new WWW (mWWWFileName);
+            if (IsUsedCached)
+                mLoader = WWW.LoadFromCacheOrDownload(mWWWFileName, 0);
+            else
+			    mLoader = new WWW (mWWWFileName);
+
+			mLoader.threadPriority = mPriority;
 		}
 
 		if (mLoader == null) {
@@ -461,7 +566,8 @@ public class WWWFileLoadTask: ITask
 				mProgress = 1.0f;
 				TaskOk ();
 				mByteData = mLoader.bytes;
-			} else
+                mText = mLoader.text;
+            } else
 				TaskFail ();
 
 			mLoader.Dispose ();
@@ -481,6 +587,12 @@ public class WWWFileLoadTask: ITask
 			return mByteData;
 		}
 	}
+
+    public string Text {
+        get {
+            return mText;
+        }
+    }
 
 	public AssetBundle Bundle
 	{
@@ -517,11 +629,14 @@ public class WWWFileLoadTask: ITask
 		OnProcess = null;
 		mProgress = 0;
 		mWWWFileName = string.Empty;
+		mPriority = ThreadPriority.Normal;
 		mResult = 0;
 		UserData = null;
 		_Owner = null;
 		mByteData = null;
-		mBundle = null;
+        mText = string.Empty;
+        mBundle = null;
+        IsUsedCached = false;
 	}
 
 	private static WWWFileLoadTask GetNewTask()
@@ -564,8 +679,10 @@ public class WWWFileLoadTask: ITask
 
 	private WWW mLoader = null;
 	private byte[] mByteData = null;
+    private string mText = string.Empty;
 	private AssetBundle mBundle = null;
 	private string mWWWFileName = string.Empty;
+	private ThreadPriority mPriority = ThreadPriority.Normal;
 	private float mProgress = 0;
 
 
@@ -705,6 +822,43 @@ public class TaskList
 			mTaskList.AddLast (node);
 			if (isOwner)
 				node.Value._Owner = this;
+		}
+	}
+
+	public void ProcessDoneContinue(Func<ITask, bool> onCheckTaskVaild = null)
+	{
+		LinkedListNode<ITask> node = mTaskList.First;
+		while (node != null && node.Value != null)
+		{
+			if (onCheckTaskVaild != null)
+			{
+				if (!onCheckTaskVaild(node.Value))
+				{
+					RemoveTask(node);
+					node = mTaskList.First;
+					continue;
+				}
+			}
+
+			if (node.Value.IsDone)
+			{
+				TaskEnd(node.Value);
+				RemoveTask(node);
+				node = mTaskList.First;
+				continue;
+			}
+
+			TaskProcess(node.Value);
+
+			if (node.Value.IsDone)
+			{
+				TaskEnd(node.Value);
+				RemoveTask(node);
+				node = mTaskList.First;
+				continue;
+			}
+
+			break;
 		}
 	}
 

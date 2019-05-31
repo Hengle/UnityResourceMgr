@@ -17,9 +17,62 @@ public class BaseResLoader: CachedMonoBehaviour
 
 	#if USE_CHECK_VISIBLE
 	private bool m_IsCheckedVisible = false;
-	#endif
+#endif
 
-	private void CheckVisible()
+    #region Instance Material
+    // 记录实例化的材质Map
+    private Dictionary<int, Material> m_InstanceMaterialMap = null;
+
+    protected Material GetInstanceMaterialMap(int instanceId) {
+        if (m_InstanceMaterialMap != null && m_InstanceMaterialMap.Count > 0) {
+            Material ret;
+            if (m_InstanceMaterialMap.TryGetValue(instanceId, out ret))
+                return ret;
+        }
+        return null;
+    }
+
+    protected void AddOrSetInstanceMaterialMap(int instanceId, Material cloneMaterial) {
+        if (m_InstanceMaterialMap != null && m_InstanceMaterialMap.Count > 0) {
+            Material oldMat;
+            if (m_InstanceMaterialMap.TryGetValue(instanceId, out oldMat)) {
+                if (oldMat != null)
+                    GameObject.Destroy(oldMat);
+                if (cloneMaterial != null)
+                    m_InstanceMaterialMap[instanceId] = cloneMaterial;
+                else
+                    m_InstanceMaterialMap.Remove(instanceId);
+                return;
+            }
+        }
+
+        if (cloneMaterial == null)
+            return;
+
+        if (m_InstanceMaterialMap == null)
+            m_InstanceMaterialMap = new Dictionary<int, Material>();
+        m_InstanceMaterialMap.Add(instanceId, cloneMaterial);
+    }
+
+    protected void ClearInstanceMaterialMap() {
+        if (m_InstanceMaterialMap == null || m_InstanceMaterialMap.Count <= 0)
+            return;
+        var iter = m_InstanceMaterialMap.GetEnumerator();
+        while (iter.MoveNext()) {
+            Material mat = iter.Current.Value;
+            if (mat != null)
+                GameObject.Destroy(mat);
+        }
+        iter.Dispose();
+        m_InstanceMaterialMap.Clear();
+    }
+
+    protected void ClearInstanceMaterialMap(int instanceId) {
+        AddOrSetInstanceMaterialMap(instanceId, null);
+    }
+    #endregion
+	
+    private void CheckVisible()
 	{
 		#if USE_CHECK_VISIBLE
 		if (m_IsCheckedVisible)
@@ -39,7 +92,7 @@ public class BaseResLoader: CachedMonoBehaviour
 	private void CheckResMap()
 	{
 		if (m_ResMap == null)
-			m_ResMap = new Dictionary<ResKey, ResValue> ();
+			m_ResMap = new Dictionary<ResKey, ResValue> (ResKeyComparser.Default);
 	}
 
 	protected bool FindResValue(ResKey key, out ResValue value)
@@ -77,6 +130,9 @@ public class BaseResLoader: CachedMonoBehaviour
 		string ret = string.Format("_Mat_{0:D}", matIdx);
 		return ret;
 	}
+
+	protected class ResKeyComparser: StructComparser<ResKey>
+	{}
 
 	protected struct ResKey : IEquatable<ResKey>
 	{
@@ -191,23 +247,6 @@ public class BaseResLoader: CachedMonoBehaviour
 
 	protected virtual bool InternalDestroyResource(ResKey key, ResValue res)
 	{
-		if (key.resType == typeof(Sprite))
-		{
-			if (res.obj != null)
-				Resources.UnloadAsset(res.obj);
-		} else if (key.resType == typeof(Sprite[]))
-		{
-			if (res.objs != null)
-			{
-				for (int i = 0; i < res.objs.Length; ++i)
-				{
-					UnityEngine.Object obj = res.objs[i];
-					if (obj != null)
-						Resources.UnloadAsset(obj);
-				}
-			}
-		}
-
 		return true;
 	}
 
@@ -252,7 +291,10 @@ public class BaseResLoader: CachedMonoBehaviour
 	protected void SetResource(UnityEngine.Object target, UnityEngine.Object res, System.Type resType, string resName = "", string tag = "")
 	{
 		if (target == null)
+		{
+			ResourceMgr.Instance.DestroyObject(res);
 			return;
+		}
 		SetResource(target.GetInstanceID(), res, resType, resName, tag);
 	}
 
@@ -288,13 +330,24 @@ public class BaseResLoader: CachedMonoBehaviour
 	protected void SetResources(UnityEngine.Object target, UnityEngine.Object[] res, System.Type resType, string resName = "", string tag = "")
 	{
 		if (target == null)
+		{
+			ResourceMgr.Instance.DestroyObjects(res);
 			return;
+		}
 		SetResources(target.GetInstanceID(), res, resType, resName, tag);
 	}
 
 	public void ClearAllResources()
 	{
-		if (m_ResMap == null)
+
+		// 关闭所有携程
+		//StopAllCoroutines();
+		StopAllLoadCoroutines();
+
+        // 清理掉所有实例化的Material
+        ClearInstanceMaterialMap();
+
+        if (m_ResMap == null)
 			return;
 		
 		var iter = m_ResMap.GetEnumerator();
@@ -302,11 +355,11 @@ public class BaseResLoader: CachedMonoBehaviour
 		{
 			if (InternalDestroyResource(iter.Current.Key, iter.Current.Value))
 			{
-				if (iter.Current.Value.obj != null)
-					ResourceMgr.Instance.DestroyObject(iter.Current.Value.obj);
+                if (iter.Current.Value.obj != null)
+                    ResourceMgr.Instance.DestroyObject(iter.Current.Value.obj);
 
-				if (iter.Current.Value.objs != null)
-					ResourceMgr.Instance.DestroyObjects(iter.Current.Value.objs);
+                if (iter.Current.Value.objs != null)
+                    ResourceMgr.Instance.DestroyObjects(iter.Current.Value.objs);
 			}
 
             // 進入池
@@ -325,7 +378,6 @@ public class BaseResLoader: CachedMonoBehaviour
 	{
 		if (sp == null)
 			return;
-		Resources.UnloadAsset(sp);
 		ResourceMgr.Instance.DestroyObject(sp);
 	}
 
@@ -338,15 +390,89 @@ public class BaseResLoader: CachedMonoBehaviour
 		ResValue value;
 		if (FindResValue (key, out value)) {
 			if (string.Compare (value.tag, fileName) == 0)
+			{
 				// 相等说明当前已经是，所以不需要外面设置了
 				mat = value.obj as Material;
-			return 1;
+				return 1;
+			}
 		}
 
 		mat = ResourceMgr.Instance.LoadMaterial(fileName, ResourceCacheType.rctRefAdd);
+		if (mat == null)
+			return 0;
 		SetResources(target, null, typeof(Material[]));
 		SetResource(target, mat, typeof(Material), "", fileName);
 		return 2;
+	}
+
+	public delegate bool OnGetItem<T>(int index, out T a, out string fileName);
+	public delegate bool OnGetItem1<T>(int index, out T a, out string fileName, out string param);
+
+	private static readonly WaitForEndOfFrame m_EndOfFrame = new WaitForEndOfFrame();
+
+	protected IEnumerator LoadAsync<T>(int start, int end, OnGetItem<T> onGetItem, Func<T, string, bool> onLoad, float delayTime = 0) where T: UnityEngine.Object
+	{
+		if (start < 0 || end < 0 || end < start || onGetItem == null || onLoad == null)
+			yield break;
+		
+		bool isDelayMode = delayTime > float.Epsilon;
+		WaitForSeconds seconds = null;
+		if (isDelayMode)
+			seconds = new WaitForSeconds(delayTime);
+
+		Delegate key = onGetItem as Delegate;
+		for (int i = start; i <= end; ++i)
+		{
+			T target;
+			string fileName;
+			if (!onGetItem(i, out target, out fileName))
+			{
+				StopLoadCoroutine(key);
+				yield break;
+			}
+			if (target != null && !string.IsNullOrEmpty(fileName))
+				onLoad(target, fileName);
+
+			if (seconds != null)
+				yield return seconds;
+			else
+				yield return m_EndOfFrame;
+		}
+			
+		StopLoadCoroutine(key);
+	}
+
+	protected IEnumerator LoadAsync<T>(int start, int end, OnGetItem1<T> onGetItem, Func<T, string, string, bool> onLoad, float delayTime = 0) where T: UnityEngine.Object
+	{
+		if (start < 0 || end < 0 || end < start || onGetItem == null || onLoad == null)
+			yield break;
+
+		bool isDelayMode = delayTime > float.Epsilon;
+		WaitForSeconds seconds = null;
+		if (isDelayMode)
+			seconds = new WaitForSeconds(delayTime);
+
+		Delegate key = onGetItem as Delegate;
+		for (int i = start; i <= end; ++i)
+		{
+			T target;
+			string fileName;
+			string param;
+			if (!onGetItem(i, out target, out fileName, out param))
+			{
+				StopLoadCoroutine(key);
+				yield break;
+			}
+			if (target != null && !string.IsNullOrEmpty(fileName))
+				onLoad(target, fileName, param);
+
+			if (seconds != null)
+				yield return seconds;
+			else
+				yield return m_EndOfFrame;
+		}
+			
+		StopLoadCoroutine(key);
 	}
 
 	public bool LoadMaterial(MeshRenderer renderer, string fileName)
@@ -361,6 +487,10 @@ public class BaseResLoader: CachedMonoBehaviour
 
 		if (result == 2)
 			renderer.sharedMaterial = mat;
+        else if (result == 1) {
+            if (renderer.sharedMaterial == null)
+                renderer.sharedMaterial = mat;
+        }
 		return mat != null;
 	}
 
@@ -385,8 +515,12 @@ public class BaseResLoader: CachedMonoBehaviour
 
 		if (result == 2)
 			sprite.sharedMaterial = mat;
+        else if (result == 1) {
+            if (sprite.sharedMaterial == null)
+                sprite.sharedMaterial = mat;
+        }
 
-		return mat != null;
+        return mat != null;
 	}
 
 	public void ClearMaterial(SpriteRenderer sprite)
@@ -397,6 +531,11 @@ public class BaseResLoader: CachedMonoBehaviour
 		sprite.sharedMaterial = null;
 		sprite.material = null;
 	}
+	
+	public static GameObject InstantiateGameObj(GameObject orgObj)
+    {
+        return ResourceMgr.Instance.InstantiateGameObj(orgObj);
+    }
 
 	public bool LoadSprite(SpriteRenderer sprite, string fileName)
 	{
@@ -419,7 +558,7 @@ public class BaseResLoader: CachedMonoBehaviour
 			}
 		};
 
-		Sprite[] sps = ResourceMgr.Instance.LoadSprites(fileName, ResourceCacheType.rctRefAdd);
+		Sprite[] sps = ResourceMgr.Instance.LoadSprites(fileName);
 		if (sps == null || sps.Length <= 0) {
 			sprite.sprite = null;
 			SetResources(sprite, null, typeof(Sprite[]));
@@ -459,7 +598,7 @@ public class BaseResLoader: CachedMonoBehaviour
 			return false;
 		};
 
-		Sprite[] sps = ResourceMgr.Instance.LoadSprites(fileName, ResourceCacheType.rctRefAdd);
+		Sprite[] sps = ResourceMgr.Instance.LoadSprites(fileName);
 		bool isFound = false;
 		for (int i = 0; i < sps.Length; ++i)
 		{
@@ -546,6 +685,31 @@ public class BaseResLoader: CachedMonoBehaviour
 			SetResource(target.GetInstanceID(), target, typeof(Texture));
 		return target != null;
 	}
+	
+	public bool LoadTexture(MeshRenderer renderer, string fileName, string matName) {
+            if (renderer == null || string.IsNullOrEmpty(fileName) || string.IsNullOrEmpty(matName))
+                return false;
+
+            Material mat = renderer.material;
+            if (mat == null)
+                return false;
+
+            Texture tex = ResourceMgr.Instance.LoadTexture(fileName, ResourceCacheType.rctRefAdd);
+            SetResource(renderer, tex, typeof(Texture), matName);
+            mat.SetTexture(matName, tex);
+
+            return tex != null;
+        }
+
+     public void ClearTexture(MeshRenderer renderer, string matName) {
+        if (renderer == null)
+            return;
+
+        ClearResource<Texture>(renderer, matName);
+        Material mat = renderer.material;
+        if (mat != null)
+          mat.SetTexture(matName, null);
+    }
 
 	public void ClearShader(ref Shader target)
 	{
@@ -695,13 +859,13 @@ public class BaseResLoader: CachedMonoBehaviour
 			return tex != null;
 		}
 
-	public GameObject CreateGameObject(string fileName)
+	public static GameObject CreateGameObject(string fileName)
 	{
 		GameObject ret = ResourceMgr.Instance.CreateGameObject(fileName);
 		return ret;
 	}
 
-	public T CreateGameObject<T>(string fileName) where T: UnityEngine.Component
+	public static T CreateGameObject<T>(string fileName) where T: UnityEngine.Component
 	{
 		GameObject obj = ResourceMgr.Instance.CreateGameObject(fileName);
 		if (obj == null)
@@ -709,4 +873,161 @@ public class BaseResLoader: CachedMonoBehaviour
 		T ret = obj.GetComponent<T>();
 		return ret;
 	}
+
+	/*------------------------------------------ 异步方法 ---------------------------------------------*/
+	private Dictionary<Delegate, Coroutine> m_EvtCoroutineMap = null;
+
+	protected void StopAllLoadCoroutines()
+	{
+		if (m_EvtCoroutineMap != null)
+		{
+			var iter = m_EvtCoroutineMap.GetEnumerator();
+			while (iter.MoveNext())
+			{
+				var c = iter.Current.Value;
+				if (c != null)
+					StopCoroutine(c);
+			}
+			iter.Dispose();
+			m_EvtCoroutineMap.Clear();
+		}
+	}
+
+	protected void StopLoadCoroutine(Delegate key)
+	{
+		if (key == null || m_EvtCoroutineMap == null)
+			return;
+		Coroutine value;
+		if (m_EvtCoroutineMap.TryGetValue(key, out value))
+		{
+			m_EvtCoroutineMap.Remove(key);
+			if (value != null)
+				StopCoroutine(value);
+		}
+	}
+
+	protected Coroutine StartLoadCoroutine(Delegate key, IEnumerator iter)
+	{
+		if (key == null || iter == null)
+			return null;
+
+		StopLoadCoroutine(key);
+
+		Coroutine ret = StartCoroutine(iter);
+		if (ret != null)
+		{
+			if (m_EvtCoroutineMap == null)
+			{
+				m_EvtCoroutineMap = new Dictionary<Delegate, Coroutine>();
+			} 
+
+			m_EvtCoroutineMap.Add(key, ret);
+
+		}
+
+		return ret;
+	}
+
+	protected Coroutine StartLoadCoroutine<T>(OnGetItem<T> evtKey, IEnumerator iter) where T: UnityEngine.Object
+	{
+		if (evtKey == null || iter == null)
+			return null;
+
+		Delegate key = evtKey as Delegate;
+		if (key == null)
+			return null;
+
+		return StartLoadCoroutine(key, iter);
+	}
+
+	protected Coroutine StartLoadCoroutine<T>(OnGetItem1<T> evtKey, IEnumerator iter) where T: UnityEngine.Object
+	{
+		if (evtKey == null || iter == null)
+			return null;
+
+		Delegate key = evtKey as Delegate;
+		if (key == null)
+			return null;
+
+		return StartLoadCoroutine(key, iter);
+	}
+
+	public void LoadMaterialAsync(int start, int end, OnGetItem<MeshRenderer> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<MeshRenderer>(start, end, onGetItem, LoadMaterial, delayTime));
+	}
+
+	public void LoadMaterialAsync(int start, int end, OnGetItem<SpriteRenderer> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<SpriteRenderer>(start, end, onGetItem, LoadMaterial, delayTime));
+	}
+
+	public void LoadMainTextureAsync(int start, int end, OnGetItem<MeshRenderer> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<MeshRenderer>(start, end, onGetItem, LoadMainTexture, delayTime));
+	}
+
+	public void LoadFontAsync(int start, int end, OnGetItem<TextMesh> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<TextMesh>(start, end, onGetItem, LoadFont, delayTime));
+	}
+
+	public void LoadAniControllerAsync(int start, int end, OnGetItem<Animator> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<Animator>(start, end, onGetItem, LoadAniController, delayTime));
+	}
+
+	public void LoadSpriteAsync(int start, int end, OnGetItem1<SpriteRenderer> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<SpriteRenderer>(start, end, onGetItem, LoadSprite, delayTime));
+	}
+	
+	/*
+		protected bool LoadAllLoaderGroupBegin(UnityEngine.Object target, LoaderGroupSubNodeType subType) {
+            if (target == null || !IsCheckLoaderGroup)
+                return false;
+
+            // 针对自己，还要针对上抛的对象考虑，也要通知上抛对象的LoadAll
+            if (m_LoaderGroup != null) {
+                ++m_LoaderGroupAllRef;
+                int instanceId = target.GetInstanceID();
+                m_LoaderGroup.LoadAll(instanceId, subType);
+                if (!IsTopLoader) {
+                    EventDispatcher.Notify<UnityEngine.Object, LoaderGroupSubNodeType>(
+                        EnumNotify.CACGE_MANAGER_LOADALL, target, subType);
+                }
+                return true;
+            } else {
+                // 判断自己是否已经是顶部UI的UIBASE,如果不是则考虑上抛
+                if (!IsTopLoader) {
+                    ++m_LoaderGroupAllRef;
+                    // 说明不是顶部的UIBase,上抛
+                    EventDispatcher.Notify<UnityEngine.Object, LoaderGroupSubNodeType>(
+                        EnumNotify.CACGE_MANAGER_LOADALL, target, subType);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        protected void LoadAllLoaderGroupEnd() {
+            DecLoaderGroupAllRef();
+        }
+
+        private int m_LoaderGroupAllRef = 0;
+        public bool IsCheckLoaderGroup {
+            get {
+                return m_LoaderGroupAllRef <= 0;
+            }
+        }
+        public void AddLoaderGroupAllRef() {
+            ++m_LoaderGroupAllRef;
+        }
+
+        public void DecLoaderGroupAllRef() {
+            --m_LoaderGroupAllRef;
+            if (m_LoaderGroupAllRef < 0)
+                m_LoaderGroupAllRef = 0;
+        }
+		*/
 }

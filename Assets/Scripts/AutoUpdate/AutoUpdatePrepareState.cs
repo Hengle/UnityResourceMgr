@@ -1,3 +1,6 @@
+// 是否允许版本回退
+#define _CanBackVer
+
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -157,9 +160,9 @@ namespace AutoUpdate
 				File.Delete(m_VersionName);
 		}
 
-		private bool DoChecWriteNewVersion(byte[] pkgBuf)
+		private bool DoChecWriteNewVersion(string pkgBuf)
 		{
-			if (pkgBuf == null || pkgBuf.Length <= 0)
+			if (string.IsNullOrEmpty(pkgBuf))
 				return false;
 			
 			if (string.IsNullOrEmpty(m_VersionName))
@@ -167,6 +170,7 @@ namespace AutoUpdate
 			if (!File.Exists(m_VersionName))
 				return true;
 
+#if !_CanBackVer
 			string str = string.Empty;
 			FileStream stream = new FileStream(m_VersionName, FileMode.Open, FileAccess.Read);
 			try
@@ -186,14 +190,16 @@ namespace AutoUpdate
 
 			string persistVer;
 			string persistMd5;
-			if (AutoUpdateMgr.Instance.GetResVer(str, out persistVer, out persistMd5))
+			string zipMd5;
+			if (AutoUpdateMgr.Instance.GetResVer(str, out persistVer, out persistMd5, out zipMd5))
 			{
-				string ss = System.Text.Encoding.ASCII.GetString(pkgBuf);
+				string ss = pkgBuf;
 				if (string.IsNullOrEmpty(ss))
 					return false;
 				string pkgVer;
 				string pkgMd5;
-				if (!AutoUpdateMgr.Instance.GetResVer(ss, out pkgVer, out pkgMd5))
+				string pkgZip;
+				if (!AutoUpdateMgr.Instance.GetResVer(ss, out pkgVer, out pkgMd5, out pkgZip))
 					return false;
 
 				int comp = string.Compare(pkgVer, persistVer, StringComparison.CurrentCultureIgnoreCase);
@@ -207,6 +213,9 @@ namespace AutoUpdate
 			}
 
 			return true;
+#else
+            return false;
+			#endif
 		}
 
 		private void OnVersionLoaded(ITask task)
@@ -215,7 +224,7 @@ namespace AutoUpdate
 			{
 				WWWFileLoadTask t = task as WWWFileLoadTask;
 
-				if (DoChecWriteNewVersion(t.ByteData))
+				if (DoChecWriteNewVersion(t.Text))
 				{
 					FileStream stream = new FileStream(m_VersionName, FileMode.Create, FileAccess.Write);
 					try

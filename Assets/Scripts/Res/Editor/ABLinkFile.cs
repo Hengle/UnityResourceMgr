@@ -62,6 +62,36 @@ public class ABLinkFileCfg
 		return true;
 	}
 
+	public void RemoveKey(string key)
+	{
+		if (string.IsNullOrEmpty(key))
+			return;
+		if (m_GroupDict == null)
+			return;
+
+		string linkFileName;
+		if (!m_GroupDict.TryGetValue(key, out linkFileName))
+			return;
+
+		m_GroupDict.Remove(key);
+
+		if (!string.IsNullOrEmpty(linkFileName))
+		{
+            // 修正LINK的一处BUG，之前用linkFileName,而应该是Dir
+            string linkDir = Path.GetDirectoryName(linkFileName);
+            if (!string.IsNullOrEmpty(linkDir)) {
+                if (m_DirFileCntMap.ContainsKey(linkDir)) {
+                    int cnt = m_DirFileCntMap[linkDir];
+                    --cnt;
+                    if (cnt <= 0)
+                        m_DirFileCntMap.Remove(linkDir);
+                    else
+                        m_DirFileCntMap[linkDir] = cnt;
+                }
+            }
+		}
+	}
+
 	public void Clear()
 	{
 		if (m_GroupDict != null)

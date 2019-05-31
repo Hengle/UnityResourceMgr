@@ -19,12 +19,17 @@ public class AsyncOperationMgr: Singleton<AsyncOperationMgr>
 		void Release();
 		AsyncOperation GetOperation();
 		void Process();
+        bool GetIsDone();
 	}
 
 	public class AsyncOperationItem<T, U>: IAsyncOperationItem where T: AsyncOperation
 	{
 		internal T opt = null;
-		internal Action<T> onProcess = null;
+		internal Action<T, bool> onProcess = null;
+        private bool isDone = false;
+        public bool GetIsDone() {
+            return isDone;
+        }
 		public void Release()
 		{
 			InPool(this);
@@ -37,10 +42,13 @@ public class AsyncOperationMgr: Singleton<AsyncOperationMgr>
 
 		public void Process()
 		{
-			if ((opt == null) || (onProcess == null))
+			if ((opt == null))
 				return;
-			onProcess (opt);
-		}
+            if (onProcess != null) {
+                this.isDone = opt.isDone;
+                onProcess(opt, isDone);
+            }
+        }
 
 		public U UserData
 		{
@@ -83,7 +91,8 @@ public class AsyncOperationMgr: Singleton<AsyncOperationMgr>
 		{
 			opt = null;
 			onProcess = null;
-			UserData = default(U);
+            isDone = false;
+            UserData = default(U);
 		}
 
 		private static bool m_IsUsePool = true;
@@ -97,7 +106,7 @@ public class AsyncOperationMgr: Singleton<AsyncOperationMgr>
 	{
 		if (opt == null)
 			return null;
-		Timer time;
+		ITimer time;
 		if (mDic.TryGetValue (opt, out time))
 		{
 			return GetAsyncOptionTimerOprItem<T, U>(time);
@@ -105,9 +114,9 @@ public class AsyncOperationMgr: Singleton<AsyncOperationMgr>
 			return null;
 	}
 
-	public AsyncOperationItem<T, U> AddAsyncOperation<T, U>(T opt, Action<T> onProcess) where T: AsyncOperation
+	public AsyncOperationItem<T, U> AddAsyncOperation<T, U>(T opt, Action<T, bool> onProcess) where T: AsyncOperation
 	{
-		Timer time;
+		ITimer time;
 		if (mDic.TryGetValue (opt, out time)) {
 			if (time == null)
 				return null;
@@ -120,7 +129,7 @@ public class AsyncOperationMgr: Singleton<AsyncOperationMgr>
 			return old;
 		}
 
-		time = TimerMgr.Instance.CreateTimer (false, 0, true);
+		time = TimerMgr.Instance.CreateTimer (0, true);
 		time.AddListener (OnTimerEvent);
 		//AsyncOperationItem<T, U> item = new AsyncOperationItem<T, U> ();
 		AsyncOperationItem<T, U> item =  AsyncOperationItem<T, U>.Create();
@@ -135,7 +144,7 @@ public class AsyncOperationMgr: Singleton<AsyncOperationMgr>
 
 	public void Clear()
 	{
-		Dictionary<AsyncOperation, Timer>.Enumerator iter = mDic.GetEnumerator ();
+		Dictionary<AsyncOperation, ITimer>.Enumerator iter = mDic.GetEnumerator ();
 		while (iter.MoveNext()) {
 			if (iter.Current.Value != null)
 			{
@@ -167,7 +176,7 @@ public class AsyncOperationMgr: Singleton<AsyncOperationMgr>
 	public void RemoveAsyncOperation(AsyncOperation opt) {
 		if (opt == null)
 			return;
-		Timer time;
+		ITimer time;
 		if (mDic.TryGetValue(opt, out time) && (time != null)) {
 			mDic.Remove(opt);
 			time.Dispose();
@@ -185,7 +194,7 @@ public class AsyncOperationMgr: Singleton<AsyncOperationMgr>
 		return opt;
 	}
 
-	public AsyncOperationItem<T, U> GetAsyncOptionTimerOprItem<T, U>(Timer obj) where T: AsyncOperation
+	public AsyncOperationItem<T, U> GetAsyncOptionTimerOprItem<T, U>(ITimer obj) where T: AsyncOperation
 	{
 		if (obj == null)
 			return null;
@@ -214,11 +223,11 @@ public class AsyncOperationMgr: Singleton<AsyncOperationMgr>
 		}
 
 		item.Process ();
-		if (opt.isDone)
+		if (item.GetIsDone())
 			RemoveAsyncOperation(item);
 
 	}
 	#endregion protected function
 
-	protected Dictionary<AsyncOperation, Timer> mDic = new Dictionary<AsyncOperation, Timer>();
+	protected Dictionary<AsyncOperation, ITimer> mDic = new Dictionary<AsyncOperation, ITimer>();
 }

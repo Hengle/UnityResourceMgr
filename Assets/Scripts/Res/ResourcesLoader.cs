@@ -6,8 +6,6 @@
 // 模块描述：
 //         1、用于测试环境资源加载
 //		   2、已支持异步加载回调
-//		   3. todo: Resources.LoadAsync同时多次读取，仍然会产生多个Request,
-			       后面采用AssetLoad一样的处理方式，增加一个Dictionary
 //----------------------------------------------------------------*/
 
 #define USE_HAS_EXT
@@ -33,27 +31,29 @@ public class ResourceAssetCache: AssetCache
 	
 	void CheckTag()
 	{
-		if (mTarget == null)
+		if (mTargetType == null || mTarget == null)
 			return;
 		if (string.IsNullOrEmpty(mTag))
 		{
-			if (mTarget is GameObject)
+			if (mTargetType == typeof(GameObject))
 				mTag = "obj";
 			else
-				if (mTarget is AudioClip)
+				if (mTargetType == typeof(AudioClip))
 					mTag = "audio";
 			else
-				if (mTarget is Texture)
+				if (mTargetType == typeof(Texture))
 					mTag = "tex";
 			else
-				if (mTarget is Shader)
+				if (mTargetType == typeof(Shader))
 					mTag = "shader";
 			else
-				if (mTarget is Material)
+				if (mTargetType == typeof(Material))
 					mTag = "mat";
 			else
-				if (mTarget is RuntimeAnimatorController)
+				if (mTargetType == typeof(RuntimeAnimatorController))
 					mTag = "AniController";
+			else
+				mTag = "[UnKnown]";						
 			
 			if (!string.IsNullOrEmpty(mTag))
 			{
@@ -67,23 +67,24 @@ public class ResourceAssetCache: AssetCache
 	
 	private string mTag = string.Empty;
 #endif
-	public ResourceAssetCache(UnityEngine.Object target, string fileName)
+	public ResourceAssetCache(UnityEngine.Object target, string fileName, System.Type targetType)
 	{
 		mTarget = target;
-		mFileName = fileName;
+        mTargetType = targetType;
+        mFileName = fileName;
 		CheckGameObject();
 	}
 
 	public ResourceAssetCache()
 	{}
 
-	public static ResourceAssetCache Create(UnityEngine.Object target, string fileName)
+	public static ResourceAssetCache Create(UnityEngine.Object target, string fileName, System.Type targetType)
 	{
 		ResourceAssetCache ret;
 		if (m_PoolUsed)
-			ret = GetPool(target, fileName);
+			ret = GetPool(target, fileName, targetType);
 		else
-			ret = new ResourceAssetCache(target, fileName);
+			ret = new ResourceAssetCache(target, fileName, targetType);
 		return ret;
 	}
 
@@ -91,6 +92,14 @@ public class ResourceAssetCache: AssetCache
 		get 
 		{
 			return mTarget;
+		}
+	}
+
+	public System.Type TargetType
+	{
+		get
+		{
+			return mTargetType;
 		}
 	}
 
@@ -109,7 +118,7 @@ public class ResourceAssetCache: AssetCache
 
 	private void CheckGameObject()
 	{
-		mIsGameObject = (mTarget as GameObject) != null;
+		mIsGameObject = (mTargetType == typeof(GameObject));
 	}
 
     protected override void OnUnUsed()
@@ -119,61 +128,86 @@ public class ResourceAssetCache: AssetCache
 			loader.OnCacheDestroy(this);
 		
         mTarget = null;
+		mTargetType = null;
+		
 		mFileName = string.Empty;
-        if (m_PoolUsed)
+		if (m_PoolUsed) {
+			InPool (this);
+		} else {
+			ClearLinkListNode ();
+		}
+    }
+
+    protected override void OnUnloadAsset(UnityEngine.Object asset)
+    {
+        if (!mIsGameObject)
         {
-            InPool(this);
+            bool isTarget = asset == mTarget;
+
+            AssetCacheManager.Instance._RemoveOrgObj(asset, true);
+
+            if (isTarget)
+            {
+                // 直接立即清理
+                AssetCacheManager.Instance._Unload(this);
+            }
+            else if (IsNotUsed())
+            {
+                AssetCacheManager.Instance._RemoveOrgObj(mTarget, true);
+                AssetCacheManager.Instance._Unload(this);
+            }
         }
     }
 
-	protected override void OnUnLoad()
-	{
-		ResourcesLoader loader = ResourceMgr.Instance.ResLoader as ResourcesLoader;
-		if (loader != null)
-			loader.OnCacheDestroy(this);
+    protected override void OnUnLoad()
+    {
+        ResourcesLoader loader = ResourceMgr.Instance.ResLoader as ResourcesLoader;
+        if (loader != null)
+            loader.OnCacheDestroy(this);
 
-		if (mTarget != null) {
-			if (mIsGameObject)
-			{
-				/*
-				 * 使用GameObject.DestroyImmediate(mTarget, true) 会导致UnityEditor中 文件的操作无法使用,以及第二次使用Resources.Load失败
-				 * GameObject.DestroyObject 和 GameObject.Destroy， 使用GameObject.DestroyImmediate(mTarget, false)会提示使用 DestroyImmediate(mTarget, true)
-				 * 使用Resources.UnloadAsset 会提示错误：只能释放不可见的资源，不能是GameObject
-				 */
-	
-				// GameObject.DestroyImmediate(mTarget, true);
-				// GameObject.DestroyObject(mTarget);
-			  	
-				if (Application.isEditor)
-					LogMgr.Instance.LogWarning("ResourceAssetCache OnUnLoad: GameObject is not UnLoad in EditorMode!");
-			//	else
-			//		Resources.UnloadAsset(mTarget);
-					// GameObject.DestroyImmediate(mTarget, true);
-			} else
-			{
-				// texture, material etc.
-				if (mTarget != null)
-				{
+        if (mIsGameObject)
+        {
+            /*
+			 * 使用GameObject.DestroyImmediate(mTarget, true) 会导致UnityEditor中 文件的操作无法使用,以及第二次使用Resources.Load失败
+			 * GameObject.DestroyObject 和 GameObject.Destroy， 使用GameObject.DestroyImmediate(mTarget, false)会提示使用 DestroyImmediate(mTarget, true)
+			 * 使用Resources.UnloadAsset 会提示错误：只能释放不可见的资源，不能是GameObject
+			 */
+
+            // GameObject.DestroyImmediate(mTarget, true);
+            // GameObject.DestroyObject(mTarget);
+
+            if (Application.isEditor)
+                LogMgr.Instance.LogWarning("ResourceAssetCache OnUnLoad: GameObject is not UnLoad in EditorMode!");
+            //	else
+            //		Resources.UnloadAsset(mTarget);
+            // GameObject.DestroyImmediate(mTarget, true);
+        }
+        else
+        {
+            // texture, material etc.
+            if (mTarget != null)
+            {
 #if USE_UNLOADASSET
-					Resources.UnloadAsset (mTarget);
+				Resources.UnloadAsset (mTarget);
 #endif
-				}
-				//if (Application.isEditor)
-				//	LogMgr.Instance.LogWarning("ResourceAssetCache OnUnLoad: GameObject is not UnLoad in EditorMode!");
-				//GameObject.DestroyImmediate(mTarget, true);
-			}
-			mTarget = null;
-		}
+            }
+            //if (Application.isEditor)
+            //	LogMgr.Instance.LogWarning("ResourceAssetCache OnUnLoad: GameObject is not UnLoad in EditorMode!");
+            //GameObject.DestroyImmediate(mTarget, true);
+        }
 
-		mFileName = string.Empty;
+        mTarget = null;
+        mTargetType = null;
 
-		if (m_PoolUsed)
-		{
-			InPool(this);
-		}
-	}
+        mFileName = string.Empty;
 
-	private static void InitPool() {
+		if (m_PoolUsed) {
+			InPool (this);
+		} else
+			ClearLinkListNode ();
+    }
+
+    private static void InitPool() {
 		if (!m_PoolInited) {
 			m_Pool.Init(0);
 			m_PoolInited = true;
@@ -188,17 +222,19 @@ public class ResourceAssetCache: AssetCache
 		m_Pool.Store(cache);
 	}
 
-	private static ResourceAssetCache GetPool(UnityEngine.Object target, string fileName)
+	private static ResourceAssetCache GetPool(UnityEngine.Object target, string fileName, System.Type targetType)
 	{
 		InitPool();
 		ResourceAssetCache ret = m_Pool.GetObject();
 		ret.mTarget = target;
+		ret.mTargetType = targetType;
 		ret.mFileName = fileName;
 		ret.CheckGameObject();
 		return ret;
 	}
 
 	private UnityEngine.Object mTarget = null;
+	private Type mTargetType = null;
 	private bool mIsGameObject = false;
 	private string mFileName = string.Empty;
 
@@ -208,7 +244,7 @@ public class ResourceAssetCache: AssetCache
 	private static Utils.ObjectPool<ResourceAssetCache> m_Pool = new Utils.ObjectPool<ResourceAssetCache>();
 }
 
-public class ResourcesLoader: IResourceLoader
+public sealed class ResourcesLoader: IResourceLoader
 {
 	private static readonly string cResourcesStartPath = "resources/";
 	
@@ -218,14 +254,16 @@ public class ResourcesLoader: IResourceLoader
 			return false;
 		int startIdx = fileName.IndexOf (cResourcesStartPath, StringComparison.CurrentCultureIgnoreCase);
 		if (startIdx >= 0) {
-			fileName = fileName.Remove (0, startIdx + cResourcesStartPath.Length);
+			startIdx +=  cResourcesStartPath.Length;
 #if USE_HAS_EXT
 			int idx = fileName.LastIndexOf('.');
 			if (idx > 0)
 			{
-				fileName = fileName.Substring(0, idx);
+				fileName = fileName.Substring(startIdx, idx - startIdx);
 			} else if (idx == 0)
 				fileName = string.Empty;
+#else
+			fileName = fileName.Remove (0, startIdx);
 #endif
 			return true;
 		}
@@ -233,9 +271,10 @@ public class ResourcesLoader: IResourceLoader
 		return false;
 	}
 
-	private void AddRefSprites(AssetCache cache, Sprite[] sprites, ResourceCacheType cacheType) {
+	private void AddRefSprites(ResourceAssetCache cache, Sprite[] sprites, ResourceCacheType cacheType) {
 		if (cache == null || sprites == null || sprites.Length <= 0)
 			return;
+
 		if (cacheType != ResourceCacheType.rctNone) {
 			if (cacheType == ResourceCacheType.rctRefAdd)
 				AssetCacheManager.Instance._AddOrUpdateUsedList(cache, sprites.Length);
@@ -246,13 +285,13 @@ public class ResourcesLoader: IResourceLoader
 		}
 	}
 
-	private AssetCache AddRefCache(string orgFileName, UnityEngine.Object obj, ResourceCacheType cacheType)
+	private AssetCache AddRefCache(string orgFileName, UnityEngine.Object obj, ResourceCacheType cacheType, System.Type objType)
 	{
 		AssetCache cache = null;
 		if (obj && (cacheType != ResourceCacheType.rctNone)) {
 			cache = AssetCacheManager.Instance.FindOrgObjCache (obj);
 			if (cache == null)
-				cache = ResourceMgr.Instance.ResLoader.CreateCache (obj, orgFileName);
+				cache = ResourceMgr.Instance.ResLoader.CreateCache (obj, orgFileName, objType);
 			if (cache != null) {
 				if (cacheType == ResourceCacheType.rctRefAdd)
 					AssetCacheManager.Instance._AddOrUpdateUsedList (cache);
@@ -263,7 +302,7 @@ public class ResourcesLoader: IResourceLoader
 			if (cache == null)
 			{
 				// 第一次加载
-				cache = ResourceMgr.Instance.ResLoader.CreateCache (obj, orgFileName);
+				cache = ResourceMgr.Instance.ResLoader.CreateCache (obj, orgFileName, objType);
 				if (cache != null)
 				{
 					AssetCacheManager.Instance._AddTempAsset(cache);
@@ -275,7 +314,7 @@ public class ResourcesLoader: IResourceLoader
 		
 	}
 
-	#region public function
+#region public function
 
 	public T LoadObject<T>(string fileName, ResourceCacheType cacheType) where T: UnityEngine.Object
 	{
@@ -299,7 +338,7 @@ public class ResourcesLoader: IResourceLoader
 			}
 		}
 
-		AssetCache cache = AddRefCache(orgFileName, ret, cacheType);
+		AssetCache cache = AddRefCache(orgFileName, ret, cacheType, typeof(T));
 
 #if USE_HAS_EXT
 		if (isFirstLoad && cache != null)
@@ -311,7 +350,7 @@ public class ResourcesLoader: IResourceLoader
 		return ret;
 	}
 
-	public bool LoadObjectAsync<T>(string fileName, ResourceCacheType cacheType, Action<float, bool, T> onProcess) where T: UnityEngine.Object
+	public bool LoadObjectAsync<T>(string fileName, ResourceCacheType cacheType, int priority, Action<float, bool, T> onProcess) where T: UnityEngine.Object
 	{
 		if (string.IsNullOrEmpty (fileName))
 			return false;
@@ -321,7 +360,7 @@ public class ResourcesLoader: IResourceLoader
 		T obj = FindCache<T>(orgFileName);
 		if (obj != null)
 		{
-			if (AddRefCache(orgFileName, obj, cacheType) != null)
+			if (AddRefCache(orgFileName, obj, cacheType, typeof(T)) != null)
 			{
 				if (onProcess != null)
 					onProcess(1.0f, true, obj);
@@ -347,20 +386,22 @@ public class ResourcesLoader: IResourceLoader
 				return false;
 			}
 
-			AssetCache cache = AddRefCache(orgFileName, orgObj, cacheType);
+			AssetCache cache = AddRefCache(orgFileName, orgObj, cacheType, typeof(T));
 
-			#if USE_HAS_EXT
+#if USE_HAS_EXT
 			AddCacheMap(cache);
-			#endif
+#endif
 
 			if (onProcess != null)
 				onProcess(request.progress, request.isDone, orgObj);
 			return true;
 		}
 
+		request.priority = priority;
+
 		var ret = AsyncOperationMgr.Instance.AddAsyncOperation<ResourceRequest, System.Object> (request,
-		                                              delegate (ResourceRequest req) {
-			if (req.isDone)
+		                                              delegate (ResourceRequest req, bool isDone) {
+			if (isDone)
 			{
 				T orgObj = req.asset as T;
 				if (orgObj == null)
@@ -370,17 +411,17 @@ public class ResourcesLoader: IResourceLoader
 					return;
 				}
 
-				AssetCache cache = AddRefCache(orgFileName, orgObj, cacheType);
-				#if USE_HAS_EXT
+				AssetCache cache = AddRefCache(orgFileName, orgObj, cacheType, typeof(T));
+#if USE_HAS_EXT
 				AddCacheMap(cache);
-				#endif
+#endif
 
 				if (onProcess != null)
-					onProcess(req.progress, req.isDone, orgObj);
+					onProcess(req.progress, isDone, orgObj);
 			} else
 			{
 				if (onProcess != null)
-					onProcess(req.progress, req.isDone, null);
+					onProcess(req.progress, isDone, null);
 			}
 			
 		}
@@ -394,9 +435,9 @@ public class ResourcesLoader: IResourceLoader
 		return LoadObject<Shader>(fileName, cacheType);
 	}
 
-	public override bool LoadShaderAsync(string fileName, ResourceCacheType cacheType, Action<float, bool, Shader> onProcess)
+	public override bool LoadShaderAsync(string fileName, ResourceCacheType cacheType, Action<float, bool, Shader> onProcess, int priority = 0)
 	{
-		return LoadObjectAsync<Shader> (fileName, cacheType, onProcess);
+		return LoadObjectAsync<Shader> (fileName, cacheType, priority, onProcess);
 	}
 
 	public override GameObject LoadPrefab(string fileName, ResourceCacheType cacheType)
@@ -404,9 +445,9 @@ public class ResourcesLoader: IResourceLoader
 		return LoadObject<GameObject> (fileName, cacheType);
 	}
 
-	public override bool LoadPrefabAsync(string fileName, ResourceCacheType cacheType, Action<float, bool, GameObject> onProcess)
+	public override bool LoadPrefabAsync(string fileName, ResourceCacheType cacheType, Action<float, bool, GameObject> onProcess, int priority = 0)
 	{
-		return LoadObjectAsync<GameObject> (fileName, cacheType, onProcess);
+		return LoadObjectAsync<GameObject> (fileName, cacheType, priority, onProcess);
 	}
 
 	public override AudioClip LoadAudioClip(string fileName, ResourceCacheType cache)
@@ -414,9 +455,9 @@ public class ResourcesLoader: IResourceLoader
 		return LoadObject<AudioClip> (fileName, cache);
 	}
 
-	public override bool LoadAudioClipAsync(string fileName, ResourceCacheType cache, Action<float, bool, AudioClip> onProcess)
+	public override bool LoadAudioClipAsync(string fileName, ResourceCacheType cache, Action<float, bool, AudioClip> onProcess, int priority = 0)
 	{
-		return LoadObjectAsync<AudioClip> (fileName, cache, onProcess);
+		return LoadObjectAsync<AudioClip> (fileName, cache, priority, onProcess);
 	}
 
 	public override string LoadText(string fileName, ResourceCacheType cache)
@@ -424,7 +465,7 @@ public class ResourcesLoader: IResourceLoader
 		TextAsset text = LoadObject<TextAsset>(fileName, cache);
 		if (text == null)
 			return null;
-		return System.Text.Encoding.UTF8.GetString (text.bytes);
+        return text.text;
 	}
 
 	public override byte[] LoadBytes(string fileName, ResourceCacheType cache)
@@ -435,9 +476,9 @@ public class ResourcesLoader: IResourceLoader
 		return text.bytes;
 	}
 
-	public override bool LoadTextAsync (string fileName, ResourceCacheType cache, Action<float, bool, TextAsset> onProcess)
+	public override bool LoadTextAsync (string fileName, ResourceCacheType cache, Action<float, bool, TextAsset> onProcess, int priority = 0)
 	{
-		return LoadObjectAsync<TextAsset> (fileName, cache, onProcess);
+		return LoadObjectAsync<TextAsset> (fileName, cache, priority, onProcess);
 	}
 
 	// not used addToCache
@@ -447,9 +488,9 @@ public class ResourcesLoader: IResourceLoader
 	}
 
 	// not used addToCache
-	public override bool LoadMaterialAsync(string fileName, ResourceCacheType cacheType, Action<float, bool, Material> onProcess)
+	public override bool LoadMaterialAsync(string fileName, ResourceCacheType cacheType, Action<float, bool, Material> onProcess, int priority = 0)
 	{
-		return LoadObjectAsync<Material> (fileName, cacheType, onProcess);
+		return LoadObjectAsync<Material> (fileName, cacheType, priority, onProcess);
 	}
 
 	// not used addToCache
@@ -459,9 +500,9 @@ public class ResourcesLoader: IResourceLoader
 	}
 
 	// not used addToCache
-	public override bool LoadTextureAsync(string fileName, ResourceCacheType cacheType, Action<float, bool, Texture> onProcess)
+	public override bool LoadTextureAsync(string fileName, ResourceCacheType cacheType, Action<float, bool, Texture> onProcess, int priority = 0)
 	{
-		return LoadObjectAsync<Texture> (fileName, cacheType, onProcess);
+		return LoadObjectAsync<Texture> (fileName, cacheType, priority, onProcess);
 	}
 
 	public override Font LoadFont (string fileName, ResourceCacheType cacheType)
@@ -469,9 +510,9 @@ public class ResourcesLoader: IResourceLoader
 		return LoadObject<Font> (fileName, cacheType);
 	}
 
-	public override bool LoadFontAsync (string fileName, ResourceCacheType cacheType, Action<float, bool, Font> onProcess)
+	public override bool LoadFontAsync (string fileName, ResourceCacheType cacheType, Action<float, bool, Font> onProcess, int priority = 0)
 	{
-		return LoadObjectAsync<Font> (fileName, cacheType, onProcess);
+		return LoadObjectAsync<Font> (fileName, cacheType, priority, onProcess);
 	}
 
 	public override RuntimeAnimatorController LoadAniController(string fileName, ResourceCacheType cacheType)
@@ -479,9 +520,9 @@ public class ResourcesLoader: IResourceLoader
 		return LoadObject<RuntimeAnimatorController> (fileName, cacheType);
 	}
 
-	public override bool LoadAniControllerAsync(string fileName, ResourceCacheType cacheType, Action<float, bool, RuntimeAnimatorController> onProcess)
+	public override bool LoadAniControllerAsync(string fileName, ResourceCacheType cacheType, Action<float, bool, RuntimeAnimatorController> onProcess, int priority = 0)
 	{
-		return LoadObjectAsync<RuntimeAnimatorController> (fileName, cacheType, onProcess);
+		return LoadObjectAsync<RuntimeAnimatorController> (fileName, cacheType, priority, onProcess);
 	}
 
 	public override AnimationClip LoadAnimationClip(string fileName, ResourceCacheType cacheType)
@@ -489,9 +530,9 @@ public class ResourcesLoader: IResourceLoader
 		return LoadObject<AnimationClip> (fileName, cacheType);
 	}
 
-	public override bool LoadAnimationClipAsync(string fileName, ResourceCacheType cacheType, Action<float, bool, AnimationClip> onProcess)
+	public override bool LoadAnimationClipAsync(string fileName, ResourceCacheType cacheType, Action<float, bool, AnimationClip> onProcess, int priority = 0)
 	{
-		return LoadObjectAsync<AnimationClip> (fileName, cacheType, onProcess);
+		return LoadObjectAsync<AnimationClip> (fileName, cacheType, priority, onProcess);
 	}
 
 	public override ScriptableObject LoadScriptableObject (string fileName, ResourceCacheType cacheType)
@@ -499,78 +540,93 @@ public class ResourcesLoader: IResourceLoader
 		return LoadObject<ScriptableObject> (fileName, cacheType);
 	}
 
-	public override bool LoadScriptableObjectAsync (string fileName, ResourceCacheType cacheType, Action<float, bool, UnityEngine.ScriptableObject> onProcess)
+	public override bool LoadScriptableObjectAsync (string fileName, ResourceCacheType cacheType, Action<float, bool, UnityEngine.ScriptableObject> onProcess, int priority = 0)
 	{
-		return LoadObjectAsync<ScriptableObject> (fileName, cacheType, onProcess);
+		return LoadObjectAsync<ScriptableObject> (fileName, cacheType, priority, onProcess);
 	}
 
-	public override Sprite[] LoadSprites(string fileName, ResourceCacheType cacheType) {
-		if (string.IsNullOrEmpty(fileName))
-			return null;
+		public override Sprite[] LoadSprites(string fileName) {
+			if (string.IsNullOrEmpty(fileName))
+				return null;
 
-		Texture tex = LoadObject<Texture>(fileName, ResourceCacheType.rctTemp);
-		if (tex == null)
-			return null;
-		AssetCache cache = AssetCacheManager.Instance.FindOrgObjCache(tex);
-		if (cache == null)
-			return null;
+			Texture tex = LoadObject<Texture>(fileName, ResourceCacheType.rctTemp);
+			if (tex == null)
+				return null;
+			AssetCache cache = AssetCacheManager.Instance.FindOrgObjCache(tex);
+			if (cache == null)
+				return null;
 
-		if (!IsResLoaderFileName(ref fileName))
-			return null;
-		Sprite[] ret = Resources.LoadAll<Sprite>(fileName);
-		if (ret == null || ret.Length <= 0)
-			return null;
+            ResourceAssetCache resCache = cache as ResourceAssetCache;
+            if (resCache == null)
+				return null;
 
-		AddRefSprites(cache, ret, cacheType);
+			if (!IsResLoaderFileName(ref fileName))
+				return null;
 
-		return ret;
-	}
+            Sprite[] ret = Resources.LoadAll<Sprite>(fileName);
 
-	public override bool LoadSpritesAsync(string fileName, ResourceCacheType cacheType, Action<float, bool, UnityEngine.Object[]> onProcess) {
-		return LoadObjectAsync<Texture>(fileName, ResourceCacheType.rctRefAdd,
-			delegate(float process, bool isDone, Texture obj) {
-				if (isDone) {
-					if (obj == null) {
+            if (ret == null || ret.Length <= 0)
+				return null;
+
+			AddRefSprites(resCache, ret, ResourceCacheType.rctRefAdd);
+
+			return ret;
+		}
+
+	public override bool LoadSpritesAsync(string fileName, Action<float, bool, UnityEngine.Object[]> onProcess, int priority = 0) {
+		return LoadObjectAsync<Texture>(fileName, ResourceCacheType.rctRefAdd, priority,
+				delegate(float process, bool isDone, Texture obj) {
+					if (isDone) {
+						if (obj == null) {
+							if (onProcess != null)
+								onProcess(process, isDone, null);
+							return;
+						}
+
+						AssetCache cache = AssetCacheManager.Instance.FindOrgObjCache(obj);
+						if (cache == null) {
+							if (onProcess != null)
+								onProcess(process, isDone, null);
+							return;
+						}
+
+						ResourceMgr.Instance.DestroyObject(obj);
+
+                        ResourceAssetCache resCache = cache as ResourceAssetCache;
+                        if (resCache == null)
+                        {
+                            if (onProcess != null)
+                                onProcess(process, isDone, null);
+                            return;
+						}
+
+                        if (!IsResLoaderFileName(ref fileName))
+                        {
+                            if (onProcess != null)
+                                onProcess(process, isDone, null);
+                            return;
+						}
+                        Sprite[] ret = Resources.LoadAll<Sprite>(fileName);
+
+                        if (ret == null || ret.Length <= 0) {
+							if (onProcess != null)
+								onProcess(process, isDone, null);
+							return;
+						}
+
+						AddRefSprites(resCache, ret, ResourceCacheType.rctRefAdd);
+
 						if (onProcess != null)
-							onProcess(process, isDone, null);
+							onProcess(process, isDone, ret);
+
 						return;
 					}
-
-					AssetCache cache = AssetCacheManager.Instance.FindOrgObjCache(obj);
-					if (cache == null) {
-						if (onProcess != null)
-							onProcess(process, isDone, null);
-						return;
-					}
-
-					ResourceMgr.Instance.DestroyObject(obj);
-
-					if (!IsResLoaderFileName(ref fileName)) {
-						if (onProcess != null)
-							onProcess(process, isDone, null);
-						return;
-					}
-
-					Sprite[] ret = Resources.LoadAll<Sprite>(fileName);
-					if (ret == null || ret.Length <= 0) {
-						if (onProcess != null)
-							onProcess(process, isDone, null);
-						return;
-					}
-
-					AddRefSprites(cache, ret, cacheType);
 
 					if (onProcess != null)
-						onProcess(process, isDone, ret);
-
-					return;
+						onProcess(process, isDone, null);
 				}
-
-				if (onProcess != null)
-					onProcess(process, isDone, null);
-			}
-		);
-	}
+			);
+		}
 
 #if UNITY_5
 	public override ShaderVariantCollection LoadShaderVarCollection(string fileName, 
@@ -580,11 +636,11 @@ public class ResourcesLoader: IResourceLoader
 	}
 	
 	public override bool LoadShaderVarCollectionAsync(string fileName, ResourceCacheType cacheType, 
-	                                                  Action<float, bool, ShaderVariantCollection> onProcess)
+		Action<float, bool, ShaderVariantCollection> onProcess, int priority = 0)
 	{
-		return LoadObjectAsync<ShaderVariantCollection> (fileName, cacheType, onProcess);
+		return LoadObjectAsync<ShaderVariantCollection> (fileName, cacheType, priority, onProcess);
 	}
-#endif	
+#endif
 
 	public override bool OnSceneLoad(string sceneName)
 	{
@@ -593,7 +649,7 @@ public class ResourcesLoader: IResourceLoader
 		return true;
 	}
 
-	public override bool OnSceneLoadAsync(string sceneName, Action onEnd)
+	public override bool OnSceneLoadAsync(string sceneName, Action onEnd, int priority = 0)
 	{
 		if (onEnd != null)
 			onEnd();
@@ -607,16 +663,16 @@ public class ResourcesLoader: IResourceLoader
 		return true;
 	}
 
-	public override AssetCache CreateCache(UnityEngine.Object orgObj, string fileName)
+	public override AssetCache CreateCache(UnityEngine.Object orgObj, string fileName, System.Type orgType)
 	{
 		if (orgObj == null)
 			return null;
 
-		ResourceAssetCache cache = ResourceAssetCache.Create(orgObj, fileName);
+		ResourceAssetCache cache = ResourceAssetCache.Create(orgObj, fileName, orgType);
 		return cache;
 	}
 
-	#endregion public function
+#endregion public function
 
 	private AssetCache FindCache(string fileName, System.Type resType)
 	{
@@ -645,14 +701,14 @@ public class ResourcesLoader: IResourceLoader
 		if (cache == null)
 			return;
 
-		if (cache.Target == null)
+		if (cache.TargetType == null)
 			return;
 		
 		string fileName = cache.FileName;
 		if (string.IsNullOrEmpty(fileName))
 			return;
 
-		System.Type resType = cache.Target.GetType();
+		System.Type resType = cache.TargetType;
 		CacheKey key = CreateCacheKey(fileName, resType);
 		if (m_CacheMap.ContainsKey(key))
 			m_CacheMap.Remove(key);
@@ -670,20 +726,21 @@ public class ResourcesLoader: IResourceLoader
 
 	private void AddCacheMap(ResourceAssetCache cache)
 	{
-		if (cache == null || cache.Target == null)
+		if (cache == null || cache.Target == null || cache.TargetType == null)
 			return;
 
 		string fileName = cache.FileName;
 		if (string.IsNullOrEmpty(fileName))
 			return;
 		
-		System.Type resType = cache.Target.GetType();
+		System.Type resType = cache.TargetType;
 		CacheKey key = CreateCacheKey(fileName, resType);
 
 		if (m_CacheMap.ContainsKey(key))
 		{
 			if (m_CacheMap[key] != cache)
 			{
+				//AssetCache oldCache = m_CacheMap[key];
 				m_CacheMap[key] = cache;
 				Debug.LogErrorFormat("[AddCacheMap] CacheMap {0} exists!", fileName);
 			}
@@ -693,6 +750,9 @@ public class ResourcesLoader: IResourceLoader
 
 		m_CacheMap.Add(key, cache);
 	}
+
+	private sealed class CacheKeyComparser: StructComparser<CacheKey>
+	{}
 
 	private struct CacheKey: IEquatable<CacheKey>
 	{
@@ -743,5 +803,10 @@ public class ResourcesLoader: IResourceLoader
 		return ret;
 	}
 
-	private Dictionary<CacheKey, AssetCache> m_CacheMap = new Dictionary<CacheKey, AssetCache>();
+    public void AutoUpdateClear()
+    {
+        m_CacheMap.Clear ();
+    }
+
+	private Dictionary<CacheKey, AssetCache> m_CacheMap = new Dictionary<CacheKey, AssetCache>(CacheKeyComparser.Default);
 }

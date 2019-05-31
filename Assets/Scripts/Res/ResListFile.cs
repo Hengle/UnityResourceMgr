@@ -10,12 +10,15 @@ public class ResListFile
 	{
 		public string fileName;
 		public string fileContentMd5;
+		public long fileSize;
 	}
 
 	public struct ResInfo
 	{
 		public string fileContentMd5;
-		public bool isFirstDown;
+        // 文件大小
+        public long fileSize;
+        public bool isFirstDown;
 	}
 
 	public void Load(ResListFile other)
@@ -36,6 +39,19 @@ public class ResListFile
 		if (!m_ContentMd5ToNameMd5Map.TryGetValue(contentMd5, out ret))
 			ret = string.Empty;
 		return ret;
+	}
+
+	public void RemoveKey(string key)
+	{
+		if (string.IsNullOrEmpty(key))
+			return;
+		ResInfo info;
+		if (m_FileMd5Map.TryGetValue(key, out info))
+		{
+			m_FileMd5Map.Remove(key);
+			if (!string.IsNullOrEmpty(info.fileContentMd5))
+				m_ContentMd5ToNameMd5Map.Remove(info.fileContentMd5);
+		}
 	}
 
 	public bool LoadFromFile(string fileName)
@@ -93,20 +109,29 @@ public class ResListFile
 				continue;
 			}
 
+            string[] values = value.Split(';');
+            
 			ResInfo info = new ResInfo();
-			int idx = value.IndexOf(';');
-			if (idx < 0)
+			if (values == null || values.Length <= 1)
 			{
 				info.fileContentMd5 = value;
 				info.isFirstDown = false;
+				info.fileSize = 0;
 			}
 			else
 			{
-				string s = value.Substring(idx + 1).Trim();
-				if (!bool.TryParse(s, out info.isFirstDown))
+                info.fileContentMd5 = values[0];
+				if (!long.TryParse(values[1], out info.fileSize))
+					info.fileSize = 0;
+				
+				if (values.Length > 2)
+				{
+					string s = values[2];
+					if (!bool.TryParse(s, out info.isFirstDown))
+						info.isFirstDown = false;
+				} else
 					info.isFirstDown = false;
-				info.fileContentMd5 = value.Substring(0, idx);
-			}
+            }
 
 
 			m_FileMd5Map.Add(key, info);
@@ -114,7 +139,7 @@ public class ResListFile
 		}
 	}
 
-	public bool AddFile(string key, string contentMd5, bool isFirstDown)
+	public bool AddFile(string key, string contentMd5, bool isFirstDown, long fileSize)
 	{
 		if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(contentMd5))
 			return false;
@@ -128,6 +153,7 @@ public class ResListFile
 			m_ContentMd5ToNameMd5Map.Remove(info.fileContentMd5);
 			info.fileContentMd5 = contentMd5;
 			info.isFirstDown = isFirstDown;
+			info.fileSize = fileSize;
 			m_FileMd5Map[key] = info;
 			m_ContentMd5ToNameMd5Map.Add(info.fileContentMd5, key);
 
@@ -136,6 +162,7 @@ public class ResListFile
 			ResInfo info = new ResInfo();
 			info.fileContentMd5 = contentMd5;
 			info.isFirstDown = isFirstDown;
+			info.fileSize = fileSize;
 			m_FileMd5Map.Add(key, info);
 			m_ContentMd5ToNameMd5Map.Add(info.fileContentMd5, key);
 		}
@@ -150,6 +177,7 @@ public class ResListFile
 		FileStream stream = new FileStream(fileName, FileMode.Create, FileAccess.Write);
 		try
 		{
+			int writeBytes = 0;
 			for (int i = 0; i < infos.Length; ++i)
 			{
 				string s = string.Format("{0}=0;false\r\n", infos[i].fileContentMd5);
@@ -157,6 +185,12 @@ public class ResListFile
 				if (bytes != null)
 				{
 					stream.Write(bytes, 0, bytes.Length);
+					writeBytes += bytes.Length;
+					if (writeBytes > 2048)
+					{
+						writeBytes = 0;
+						stream.Flush();
+					}
 				}
 			}
 		} finally
@@ -178,11 +212,18 @@ public class ResListFile
 		{
 			Dictionary<string, ResInfo>.Enumerator iter = m_FileMd5Map.GetEnumerator();
 
+			int writeBytes = 0;
 			while (iter.MoveNext())
 			{
 				string s = string.Format("{0}=0;false\r\n", iter.Current.Value.fileContentMd5);
 				byte[] dst = System.Text.Encoding.ASCII.GetBytes(s);
 				stream.Write(dst, 0, dst.Length);
+				writeBytes += dst.Length;
+				if (writeBytes > 2048)
+				{
+					writeBytes = 0;
+					stream.Flush();
+				}
 			}
 
 			iter.Dispose();
@@ -205,13 +246,21 @@ public class ResListFile
 		{
 			Dictionary<string, ResInfo>.Enumerator iter = m_FileMd5Map.GetEnumerator();
 
+			int writeBytes = 0;
 			while (iter.MoveNext())
 			{
-				string keyValue = string.Format("{0}={1};{2}\r\n", iter.Current.Key, 
+				string keyValue = string.Format("{0}={1};{2};{3}\r\n", iter.Current.Key, 
 				                                iter.Current.Value.fileContentMd5,
+												iter.Current.Value.fileSize.ToString(),
 				                                iter.Current.Value.isFirstDown.ToString());
 				byte[] dst = System.Text.Encoding.ASCII.GetBytes(keyValue);
 				stream.Write(dst, 0, dst.Length);
+				writeBytes += dst.Length;
+				if (writeBytes > 2048)
+				{
+					writeBytes = 0;
+					stream.Flush();
+				}
 			}
 
 			iter.Dispose();
@@ -312,13 +361,45 @@ public class ResListFile
 			ResDiffInfo info = new ResDiffInfo();
 			info.fileContentMd5 = iter.Current.Value.fileContentMd5;
 			info.fileName = iter.Current.Key;
+			info.fileSize = iter.Current.Value.fileSize;
 			list.Add(info);
 		}
 		iter.Dispose();
 		return list.ToArray();
 	}
 
-	public ResDiffInfo[] GetDiffInfos(ResListFile otherFile)
+	public bool FileToDiffInfo(string fileName, out ResDiffInfo[] diff)
+	{
+		diff = null;
+		if (string.IsNullOrEmpty(fileName))
+		{
+			return false;
+		}
+
+		ResInfo info;
+		if (!m_FileMd5Map.TryGetValue(fileName, out info))
+		{
+			return false;
+		}
+
+		diff = new ResDiffInfo[1];
+		diff[0] = new ResDiffInfo();
+		diff[0].fileContentMd5 = info.fileContentMd5;
+		diff[0].fileName = fileName;
+		diff[0].fileSize = info.fileSize;
+
+		return true;
+	}
+
+    public Dictionary<string, string>.Enumerator GetFileContentMd5Iter() {
+        return m_ContentMd5ToNameMd5Map.GetEnumerator();
+    }
+
+    public Dictionary<string, ResInfo>.Enumerator GetFileNameMd5Iter() {
+        return m_FileMd5Map.GetEnumerator();
+    }
+
+    public ResDiffInfo[] GetDiffInfos(ResListFile otherFile)
 	{
 		ResDiffInfo[] ret = null;
 
@@ -359,6 +440,7 @@ public class ResListFile
 					ResDiffInfo diffInfo = new ResDiffInfo();
 					diffInfo.fileName = otherIter.Current.Key;
 					diffInfo.fileContentMd5 = otherIter.Current.Value.fileContentMd5;
+					diffInfo.fileSize = otherIter.Current.Value.fileSize;
 					diffList.Add(diffInfo);
 				}
 			}

@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
+using NsHttpClient;
 
 [ExecuteInEditMode]
 [CustomEditor(typeof(ResourceMgrMonitor))]
@@ -21,10 +22,10 @@ public class ResourceMgrMonitorEditor: Editor
 			while (node.MoveNext()) {
 				string name = node.Current.Key;
 				
-				bool isBundleRes = name.StartsWith("Bundle");
+				bool isBundleRes = name.StartsWith("Bundle:");
 				if (isBundleRes)
 				{
-					EditorGUILayout.LabelField(name);
+                    EditorGUILayout.LabelField(name);
 					EditorGUILayout.IntField(node.Current.Value);
 					hasBundleRes = true;
 				}
@@ -253,8 +254,8 @@ public class ResourceMgrMonitorEditor: Editor
 				isChg = true;
 			}
 
-			#if UNITY_5_3 || UNITY_5_4
-			cnt = BundleCreateAsyncTask.GetPoolCount();
+#if UNITY_5_3 || UNITY_5_4 || UNITY_5_5 || UNITY_5_6 || UNITY_2018
+            cnt = BundleCreateAsyncTask.GetPoolCount();
 			if (cnt != m_LastBundleCreateCnt)
 			{
 				m_LastBundleCreateCnt = cnt;
@@ -266,6 +267,20 @@ public class ResourceMgrMonitorEditor: Editor
 			if (cnt != m_LastWWWCreateCnt)
 			{
 				m_LastWWWCreateCnt = cnt;
+				isChg = true;
+			}
+
+			cnt = HttpHelper.RunCount;
+			if (cnt != m_LastRunHttpCnt)
+			{
+				m_LastRunHttpCnt = cnt;
+				isChg = true;
+			}
+
+			cnt = HttpHelper.PoolCount;
+			if (cnt != m_LastHttpPoolCnt)
+			{
+				m_LastHttpPoolCnt = cnt;
 				isChg = true;
 			}
 
@@ -292,8 +307,8 @@ public class ResourceMgrMonitorEditor: Editor
 		EditorGUILayout.LabelField("AssetBundleCache Pool");
 		EditorGUILayout.IntField(m_LastBundleCacheCnt);
 
-		#if UNITY_5_3 || UNITY_5_4
-		EditorGUILayout.Space();
+#if UNITY_5_3 || UNITY_5_4 || UNITY_5_5 || UNITY_5_6 || UNITY_2018
+        EditorGUILayout.Space();
 		EditorGUILayout.LabelField("BundleCreateAsyncTask Pool");
 		EditorGUILayout.IntField(m_LastBundleCreateCnt);
 		#endif
@@ -303,27 +318,42 @@ public class ResourceMgrMonitorEditor: Editor
 		EditorGUILayout.IntField(m_LastWWWCreateCnt);
 
 		EditorGUILayout.Space();
+		EditorGUILayout.LabelField("当前HTTP连接数量");
+		EditorGUILayout.IntField(m_LastRunHttpCnt);
+		EditorGUILayout.LabelField("Http Pool数量");
+		EditorGUILayout.IntField(m_LastHttpPoolCnt);
+
+		EditorGUILayout.Space();
 		EditorGUILayout.Space();
 	}
 
-	public override void OnInspectorGUI ()
+    void DrawBundleCnt() {
+        EditorGUILayout.Space();
+        EditorGUILayout.IntField("资源Assets总数量", AssetCacheManager.Instance.AllBunldeCnt);
+    }
+
+    public override void OnInspectorGUI ()
 	{
 		DrawDefaultInspector ();
 
 		if (Application.isPlaying) {
 
-			DrawSearchTarget();
+            DrawSearchTarget();
 
 			DrawObjectPoolInfos();
 
-			// 正在使用列表
-			DrawCacheMap(mUsedAssetRefMap, "正在使用列表");
+            DrawBundleCnt();
+
+            // 正在使用列表
+            DrawCacheMap(mUsedAssetRefMap, "正在使用列表");
 
 			// 非使用列表
 			DrawCacheMap(mNotUsedAssetRefMap, "未使用列表");
 
 			DrawBtnClearNoUsed();
-		}
+		} else {
+            m_LoadMd5FindFile = false;
+        }
 	}
 
 	void DrawBtnClearNoUsed()
@@ -332,11 +362,28 @@ public class ResourceMgrMonitorEditor: Editor
 		{
 			AssetCacheManager.Instance.ClearUnUsed();
 		}
+
+		if (GUILayout.Button("UnloadUsed"))
+		{
+			ResourceMgr.Instance.UnloadUnUsed();
+		}
+
+        if (GUILayout.Button("测试AutoUpdateClear")) {
+            ResourceMgr.Instance.AutoUpdateClear();
+        }
 	}
 
 	string GetBundleKey(string fileName)
 	{
 		fileName = System.IO.Path.GetFileNameWithoutExtension(fileName);
+
+        LoadMd5FindFile();
+        if (m_Md5FindMap.Count > 0) {
+            string realFileName;
+            if (m_Md5FindMap.TryGetValue(fileName, out realFileName))
+                fileName = realFileName;
+        }
+
 		return string.Format("Bundle:{0}", fileName);
 	}
 
@@ -390,7 +437,43 @@ public class ResourceMgrMonitorEditor: Editor
 		}
 	}
 
-	private Dictionary<string, int> mUsedAssetRefMap = new Dictionary<string, int>();
+    private static void LoadMd5FindFile() {
+        if (m_LoadMd5FindFile)
+            return;
+        m_LoadMd5FindFile = true;
+        string fileName = "Assets/md5Find.txt";
+        if (System.IO.File.Exists(fileName)) {
+            System.IO.FileStream stream = new System.IO.FileStream(fileName, System.IO.FileMode.Open, System.IO.FileAccess.Read);
+            if (stream.Length > 0) {
+                byte[] buf = new byte[stream.Length];
+                stream.Read(buf, 0, buf.Length);
+                string s = System.Text.Encoding.ASCII.GetString(buf);
+                List<string> lines = new List<string>(s.Split('\r'));
+                for (int i = 0; i < lines.Count; ++i) {
+                    string line = lines[i].Trim();
+                    if (string.IsNullOrEmpty(line))
+                        continue;
+                    int idx = line.IndexOf('=');
+                    if (idx > 0) {
+                        string left = line.Substring(0, idx).Trim();
+                        if (string.IsNullOrEmpty(left))
+                            continue;
+                        string right = line.Substring(idx + 1).Trim();
+                        if (string.IsNullOrEmpty(right))
+                            continue;
+                        m_Md5FindMap.Add(left, right);
+                    }
+                }
+            }
+            stream.Dispose();
+            stream.Close();
+        }
+    }
+
+    private static bool m_LoadMd5FindFile = false;
+    private static Dictionary<string, string> m_Md5FindMap = new Dictionary<string, string>();
+
+    private Dictionary<string, int> mUsedAssetRefMap = new Dictionary<string, int>();
 	private Dictionary<string, int> mNotUsedAssetRefMap = new Dictionary<string, int>();
 	static private GameObject mShowTarget = null;
 	private float m_LastUpdateTime = 0;
@@ -401,4 +484,6 @@ public class ResourceMgrMonitorEditor: Editor
 	private int m_LastBundleCacheCnt = 0;
 	private int m_LastBundleCreateCnt = 0;
 	private int m_LastWWWCreateCnt = 0;
+	private int m_LastRunHttpCnt = 0;
+	private int m_LastHttpPoolCnt = 0;
 }

@@ -1,4 +1,4 @@
-﻿#define _USE_NGUI
+﻿//#define _USE_NGUI
 
 #if _USE_NGUI
 
@@ -9,7 +9,25 @@ using Utils;
 
 public class NGUIResLoader: BaseResLoader  {
 
-	public bool LoadMainTexture(UITexture uiTexture, string fileName)
+    private void ClearInstanceMaterialMap(UITexture target) {
+        if (target == null)
+            return;
+        ClearInstanceMaterialMap(target.GetInstanceID());
+    }
+
+    private void ClearInstanceMaterialMap(UISprite target) {
+        if (target == null)
+            return;
+        ClearInstanceMaterialMap(target.GetInstanceID());
+    }
+
+    private void ClearInstanceMaterialMap(UI2DSprite target) {
+        if (target == null)
+            return;
+        ClearInstanceMaterialMap(target.GetInstanceID());
+    }
+
+    public bool LoadMainTexture(UITexture uiTexture, string fileName)
 	{
 		if (uiTexture == null || string.IsNullOrEmpty(fileName))
 			return false;
@@ -86,7 +104,8 @@ public class NGUIResLoader: BaseResLoader  {
 			return;
 		ClearResource<Material>(uiTexture);
 		uiTexture.material = null;
-	}
+        ClearInstanceMaterialMap(uiTexture);
+    }
 
 	public bool LoadMaterial(UITexture uiTexture, string fileName)
 	{
@@ -99,8 +118,15 @@ public class NGUIResLoader: BaseResLoader  {
 			uiTexture.material = null;
 			return false;
 		}
-		if (result == 2)
-			uiTexture.material = GameObject.Instantiate(mat);
+        if (result == 2) {
+            uiTexture.material = GameObject.Instantiate(mat);
+            AddOrSetInstanceMaterialMap(uiTexture.GetInstanceID(), uiTexture.material);
+        } else if (result == 1) {
+            if (uiTexture.material == null) {
+                mat = GetInstanceMaterialMap(uiTexture.GetInstanceID());
+                uiTexture.material = mat;
+            }
+        }
 
 		return mat != null;
 	}
@@ -116,10 +142,17 @@ public class NGUIResLoader: BaseResLoader  {
 			return false;
 		}
 
-		if (result == 2)
-			uiSprite.material = GameObject.Instantiate(mat);
+        if (result == 2) {
+            uiSprite.material = GameObject.Instantiate(mat);
+            AddOrSetInstanceMaterialMap(uiSprite.GetInstanceID(), uiSprite.material);
+        } else if (result == 1) {
+            if (uiSprite.material == null) {
+                mat = GetInstanceMaterialMap(uiSprite.GetInstanceID());
+                uiSprite.material = mat;
+            }
+        }
 
-		return mat != null;
+        return mat != null;
 	}
 
 	public void ClearMaterial(UISprite uiSprite)
@@ -128,7 +161,8 @@ public class NGUIResLoader: BaseResLoader  {
 			return;
 		ClearResource<Material>(uiSprite);
 		uiSprite.material = null;
-	}
+        ClearInstanceMaterialMap(uiSprite);
+    }
 
 	public bool LoadTexture(UISprite uiSprite, string fileName, string matName)
 	{
@@ -251,7 +285,7 @@ public class NGUIResLoader: BaseResLoader  {
 	{
 		if (uiSprite == null || string.IsNullOrEmpty(fileName) || string.IsNullOrEmpty(spriteName))
 			return false;
-		Sprite[] sps = ResourceMgr.Instance.LoadSprites(fileName, ResourceCacheType.rctRefAdd);
+		Sprite[] sps = ResourceMgr.Instance.LoadSprites(fileName);
 		bool isFound = false;
 		for (int i = 0; i < sps.Length; ++i)
 		{
@@ -286,7 +320,8 @@ public class NGUIResLoader: BaseResLoader  {
 			return;
 		uiSprite.material = null;
 		ClearResource<Material>(uiSprite);
-	}
+        ClearInstanceMaterialMap(uiSprite);
+    }
 
 	public bool LoadMaterial(UI2DSprite uiSprite, string fileName)
 	{
@@ -300,10 +335,17 @@ public class NGUIResLoader: BaseResLoader  {
 			return false;
 		}
 
-		if (result == 2)
-			uiSprite.material = GameObject.Instantiate(mat);
+        if (result == 2) {
+            uiSprite.material = GameObject.Instantiate(mat);
+            AddOrSetInstanceMaterialMap(uiSprite.GetInstanceID(), uiSprite.material);
+        } else if (result == 1) {
+            if (uiSprite.material == null) {
+                mat = GetInstanceMaterialMap(uiSprite.GetInstanceID());
+                uiSprite.material = mat;
+            }
+        }
 
-		return mat != null;
+        return mat != null;
 	}
 
 	public bool LoadAltas(UISprite uiSprite, string fileName)
@@ -354,6 +396,73 @@ public class NGUIResLoader: BaseResLoader  {
 			}
 			SetResource(target, obj, typeof(UIAtlas));
 			return true;
+	}
+
+	/*------------------------------------------ 异步方法 ---------------------------------------------*/
+
+	public void LoadMainTextureAsync(int start, int end, OnGetItem<UITexture> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<UITexture>(start, end, onGetItem, LoadMainTexture, delayTime));
+	}
+
+	public void LoadShaderAsync(int start, int end, OnGetItem<UITexture> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<UITexture>(start, end, onGetItem, LoadShader, delayTime));
+	}
+
+	public void LoadMaterialAsync(int start, int end, OnGetItem<UITexture> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<UITexture>(start, end, onGetItem, LoadMaterial, delayTime));
+	}
+
+	public void LoadMaterialAsync(int start, int end, OnGetItem<UISprite> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<UISprite>(start, end, onGetItem, LoadMaterial, delayTime));
+	}
+
+	public void LoadMainTextureAsync(int start, int end, OnGetItem<UISprite> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<UISprite>(start, end, onGetItem, LoadMainTexture, delayTime));
+	}
+
+	public void LoadMainTextureAsync(int start, int end, OnGetItem<UI2DSprite> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<UI2DSprite>(start, end, onGetItem, LoadMainTexture, delayTime));
+	}
+
+	public void LoadShaderAsync(int start, int end, OnGetItem<UI2DSprite> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<UI2DSprite>(start, end, onGetItem, LoadShader, delayTime));
+	}
+
+	public void LoadMaterialAsync(int start, int end, OnGetItem<UI2DSprite> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<UI2DSprite>(start, end, onGetItem, LoadMaterial, delayTime));
+	}
+
+	public void LoadAltasAsync(int start, int end, OnGetItem<UISprite> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<UISprite>(start, end, onGetItem, LoadAltas, delayTime));
+	}
+
+	public void LoadTextureAsync(int start, int end, OnGetItem1<UITexture> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<UITexture>(start, end, onGetItem, LoadTexture, delayTime));
+	}
+
+	public void LoadTextureAsync(int start, int end, OnGetItem1<UISprite> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<UISprite>(start, end, onGetItem, LoadTexture, delayTime));
+	}
+
+	public void LoadTextureAsync(int start, int end, OnGetItem1<UI2DSprite> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<UI2DSprite>(start, end, onGetItem, LoadTexture, delayTime));
+	}
+
+	public void LoadSpriteAsync(int start, int end, OnGetItem1<UI2DSprite> onGetItem, float delayTime = 0)
+	{
+		StartLoadCoroutine(onGetItem, LoadAsync<UI2DSprite>(start, end, onGetItem, LoadSprite, delayTime));
 	}
 }
 

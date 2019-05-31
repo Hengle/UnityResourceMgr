@@ -141,7 +141,7 @@ namespace Utils
 			// 默认30秒未使用删除
 			MaxNotUsedTime = 30.0f;
 			m_NotUsedMaxCnt = maxNotUsedCnt;
-			m_Timer = TimerMgr.Instance.CreateTimer(false, 0, true, true);
+			m_Timer = TimerMgr.Instance.CreateTimer(0, true, true);
 			m_Timer.AddListener(OnTick);
 		}
 
@@ -211,8 +211,16 @@ namespace Utils
 			{
 				obj.UsedTime = GetCurrentTime();
 				obj.State = ITimePoolObj<K>.TimeObjState.to_NotUsed;
-				m_NotUsedList.AddLast(obj.LinkNode);
-				m_NotUsedHashMap.Add(obj.GetHashKey(), obj);
+				if (obj.LinkNode != null)
+				{
+					// ------保护一次
+					if (obj.LinkNode.List != null) {
+						obj.LinkNode.List.Remove(obj.LinkNode);
+					}
+					//----------------
+					m_NotUsedList.AddLast(obj.LinkNode);
+					m_NotUsedHashMap.Add(obj.GetHashKey(), obj);
+				}
 			}
 		}
 
@@ -294,6 +302,6 @@ namespace Utils
 		private int m_LoopCnt;
 		private int m_NotUsedMaxCnt;
 		private bool m_InitPool = false;
-		private Timer m_Timer = null;
+		private ITimer m_Timer = null;
 	}
 }

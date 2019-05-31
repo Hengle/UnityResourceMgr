@@ -1,3 +1,6 @@
+
+
+
 # UnityResourceMgr
 项目说明：主要实现基于UNITY资源管理以及更新打包的统一流程机制。有针对资源做Cache并带有一定的资源清理机制。
 
@@ -25,6 +28,25 @@
    
    5.依赖文件配置读取，最新采用二进制读取.
    
+   6.ResourceMgr的Destroy接口已经支持对原始资源进行Resources.UnloadAsset（第二个参数设置为true）,但注意，使用要非常小心，只有非常确认外面没有使用的情况下（Sprite要保证它对应的纹理都没有被其他地方使用），否则其他地方会丢失资源。并且不能针对GameObject进行Resources.UnloadAsset,因为Resources.UnloadAsset只能删除非可见资源。
+   
+   7.已经支持DLL热更新，生成DLL热更新步骤：1）右键先编译 CSHARP工程。2）打包APK
+
+   8.增量AssetBundle已经完全支持。
+   
+   9.支持脚本一键打包，脚本开发语言为Python, 命令行运行 python autobuild.py或者直接双击autobuild.bat(Windows平台)，脚本运行需要安装psUtil库，Windows直接安装psUtil-setup(在AutoBuild/setup里)，Mac下查看psutil.sh脚本内容，安装psutil库。
+   
+   10.AB的依赖配置文件支持三种方式加载：1.同步加载。2.多线程加载（基于改造后的LOOM库，不使用系统线程池，系统线程池在5.3.8版本会有几率卡死，申请不到额外线程）。3.协程异步加载。
+
+   
 具体说明请看WIKI: https://github.com/billwillman/UnityResourceMgr/wiki/%E7%9B%AE%E5%BD%95
+
+### 已经支持5.3和5.6版本UNITY, UNITY 2018也做了兼容。
+
+发现Unity 2018更改底层后导致的一个问题：就是AsyncOperation的isDone属性的赋值，貌似UNITY底层放到子线程赋值了，导致主线程同步执行两个函数，isDone的判断不一致，第一个为false, 另外一个为true, 导致有概率资源加载不出来，此问题已经修正。在5.3中，没有此问题。
+
+#### 脚本sign_obb目录里build.py是用来拆分 APK + obb, 用于上GOOGLE平台等海外需求使用。
+
+### todo: 将读取AssetBundles.xml放在C++层解析，进一步减少MONO堆内存使用量
 
 

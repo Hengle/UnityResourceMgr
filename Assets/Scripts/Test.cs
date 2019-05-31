@@ -21,11 +21,7 @@ public class Test : CachedMonoBehaviour {
 			{
 				if (GUI.Button(new Rect(100, 220, 150, 50), "删除Sprites"))
 				{
-					for (int i = 0; i < m_SpriteList.Length; ++i)
-					{
-						Resources.UnloadAsset(m_SpriteList[i]);
-					}
-					ResourceMgr.Instance.DestroySprites(m_SpriteList);
+					ResourceMgr.Instance.DestroySprites(m_SpriteList, true);
 					m_IsSpritesLoading = false;
 					m_SpriteList = null;
 				}
@@ -37,10 +33,13 @@ public class Test : CachedMonoBehaviour {
 				  delegate (float process, bool isDone, Object[] objs) {
 					if (isDone)
 					{
+								ResourceMgr.Instance.ABUnloadFalse(objs, true);
+								ResourceMgr.Instance.DestroyObjects(objs, true);
+								return;
 						m_IsSpritesLoading = false;
 						if (m_SpriteList != null)
 						{
-							ResourceMgr.Instance.DestroySprites(m_SpriteList);
+							ResourceMgr.Instance.DestroySprites(m_SpriteList, true);
 							m_SpriteList = null;
 						}
 						if (objs != null && objs.Length > 0)
@@ -52,7 +51,7 @@ public class Test : CachedMonoBehaviour {
 							}
 						}
 					}
-				}, ResourceCacheType.rctRefAdd))
+				}))
 					m_IsSpritesLoading = false;
 			}
 		}
@@ -81,12 +80,24 @@ public class Test : CachedMonoBehaviour {
 
 			if (GUI.Button(new Rect(260, 160, 150, 50), "(异步)创建Prefab物体"))
 			{
-				ResourceMgr.Instance.CreateGameObjectAsync("resources/prefabs/flag.prefab",
-				   delegate (float process, bool isDone, GameObject obj){
-						if (isDone && obj != null)
-							m_ObjList.Add(obj);
+
+			ResourceMgr.Instance.CreateGameObjectAsync("resources/@prefab/cube.prefab",
+				delegate (float process, bool isDone, GameObject obj){
+					if (isDone && obj != null)
+					{
+						ResourceMgr.Instance.ABUnloadFalse(obj);
 					}
+				});
+
+			ResourceMgr.Instance.CreateGameObjectAsync("resources/@prefab/flag.prefab",
+				delegate (float process, bool isDone, GameObject obj){
+					if (isDone && obj != null)
+						{
+						ResourceMgr.Instance.ABUnloadFalse(obj);
+						}
+				}
 				);
+
 			}
 
 		if (m_ObjList.Count > 0)

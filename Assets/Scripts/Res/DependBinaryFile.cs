@@ -4,6 +4,9 @@ using System.Text;
 using System.Collections;
 using System.Collections.Generic;
 using Utils;
+#if USE_FLATBUFFER
+using FlatBuffers;
+#endif
 
 #if UNITY_EDITOR
 	
@@ -58,18 +61,44 @@ public class DependBinaryFile
 		// 标记
 		public int Flag;
 
+       // public long fileMapCount;
+       // public long fileMapOffset;
+
 		internal void SaveToStream(Stream stream)
 		{
 			FilePathMgr.Instance.WriteString(stream, version);
 			FilePathMgr.Instance.WriteInt(stream, abFileCount);
 			FilePathMgr.Instance.WriteInt(stream, Flag);
+         //   FilePathMgr.Instance.WriteLong (stream, fileMapCount);
+         //   FilePathMgr.Instance.WriteLong (stream, fileMapOffset);
 		}
+
+#if USE_FLATBUFFER
+        internal Offset<AssetBundleFlatBuffer.FileHeader> SaveToFlatBuffer(FlatBufferBuilder builder) {
+            var versionOffset = builder.CreateString(version);
+            AssetBundleFlatBuffer.FileHeader.StartFileHeader(builder);
+            AssetBundleFlatBuffer.FileHeader.AddVersion(builder, versionOffset);
+            AssetBundleFlatBuffer.FileHeader.AddAbFileCount(builder, abFileCount);
+            AssetBundleFlatBuffer.FileHeader.AddFlag(builder, Flag);
+            return AssetBundleFlatBuffer.FileHeader.EndFileHeader(builder);
+        }
+#endif
 
 		public void LoadFromStream(Stream stream)
 		{
 			version = FilePathMgr.Instance.ReadString (stream);
 			abFileCount = FilePathMgr.Instance.ReadInt (stream);
 			Flag = FilePathMgr.Instance.ReadInt (stream);
+            /*
+            if (version == _D01Version) {
+                // 兼容
+                fileMapCount = 0;
+                fileMapOffset = 0;
+                return;
+            }
+            fileMapCount = FilePathMgr.Instance.ReadLong (stream);
+            fileMapOffset = FilePathMgr.Instance.ReadLong (stream);]
+            */
 		}
 	}
 
@@ -92,6 +121,20 @@ public class DependBinaryFile
 			FilePathMgr.Instance.WriteString (stream, abFileName);
 		}
 
+#if USE_FLATBUFFER
+        internal Offset<AssetBundleFlatBuffer.AssetBundleFileHeader> SaveToFlatBuffer(FlatBufferBuilder builder) {
+            var abFileNameOffset = builder.CreateString(abFileName);
+            AssetBundleFlatBuffer.AssetBundleFileHeader.StartAssetBundleFileHeader(builder);
+            AssetBundleFlatBuffer.AssetBundleFileHeader.AddSubFileCount(builder, subFileCount);
+            AssetBundleFlatBuffer.AssetBundleFileHeader.AddDependFileCount(builder, dependFileCount);
+            AssetBundleFlatBuffer.AssetBundleFileHeader.AddIsScene(builder, isScene);
+            AssetBundleFlatBuffer.AssetBundleFileHeader.AddIsMainAsset(builder, isMainAsset);
+            AssetBundleFlatBuffer.AssetBundleFileHeader.AddCompressType(builder, compressType);
+            AssetBundleFlatBuffer.AssetBundleFileHeader.AddAbFileName(builder, abFileNameOffset);
+            return AssetBundleFlatBuffer.AssetBundleFileHeader.EndAssetBundleFileHeader(builder);
+        }
+#endif
+
 		public void LoadFromStream(Stream stream)
 		{
 			subFileCount = FilePathMgr.Instance.ReadInt(stream);
@@ -106,15 +149,30 @@ public class DependBinaryFile
 	public struct SubFileInfo
 	{
 		public string fileName;
+        // shader名字(只有资源是Shader才有)
+        public string shaderName;
 
 		internal void SaveToStream(Stream stream)
 		{
 			FilePathMgr.Instance.WriteString(stream, fileName);
+            FilePathMgr.Instance.WriteString(stream, shaderName);
 		}
+
+#if USE_FLATBUFFER
+        internal Offset<AssetBundleFlatBuffer.SubFileInfo> SaveToFlatBuffer(FlatBufferBuilder builder) {
+            var fileNameOffset = builder.CreateString(fileName);
+            var shaderNameOffset = builder.CreateString(shaderName);
+            AssetBundleFlatBuffer.SubFileInfo.StartSubFileInfo(builder);
+            AssetBundleFlatBuffer.SubFileInfo.AddFileName(builder, fileNameOffset);
+            AssetBundleFlatBuffer.SubFileInfo.AddShaderName(builder, shaderNameOffset);
+            return AssetBundleFlatBuffer.SubFileInfo.EndSubFileInfo(builder);
+        }
+#endif
 
 		public void LoadFromStream(Stream stream)
 		{
 			fileName = FilePathMgr.Instance.ReadString(stream);
+            shaderName = FilePathMgr.Instance.ReadString(stream);
 		}
 	}
 
@@ -129,7 +187,17 @@ public class DependBinaryFile
 			FilePathMgr.Instance.WriteInt(stream, refCount);
 		}
 
-		public void LoadFromStream(Stream stream)
+#if USE_FLATBUFFER
+        internal Offset<AssetBundleFlatBuffer.DependInfo> SavetoFlatBuffer(FlatBufferBuilder builder) {
+            var abFileNameOffset = builder.CreateString(abFileName);
+            AssetBundleFlatBuffer.DependInfo.StartDependInfo(builder);
+            AssetBundleFlatBuffer.DependInfo.AddAbFileName(builder, abFileNameOffset);
+            AssetBundleFlatBuffer.DependInfo.AddRefCount(builder, refCount);
+            return AssetBundleFlatBuffer.DependInfo.EndDependInfo(builder);
+        }
+#endif
+
+        public void LoadFromStream(Stream stream)
 		{
 			abFileName = FilePathMgr.Instance.ReadString(stream);
 			refCount = FilePathMgr.Instance.ReadInt(stream);
@@ -163,7 +231,12 @@ public class DependBinaryFile
 		info.LoadFromStream (stream);
 		return info;
 	}
-
+	
+    /*
+	public static bool CheckFileHeaderD01(FileHeader header) {
+            return string.Compare(header.version, _D01Version) == 0;
+        }
+        */
 	public static bool CheckFileHeader(FileHeader header)
 	{
 		return string.Compare (header.version, _CurrVersion) == 0;
@@ -171,14 +244,27 @@ public class DependBinaryFile
 
 #if UNITY_EDITOR
 
-	public static void ExportFileHeader(Stream Stream, int abFileCount, int flag)
+    public static void ExportFileHeader(Stream Stream, int abFileCount, int flag/*, long fileMapOffset = 0, long fileMapCount = 0*/)
 	{
 		FileHeader header = new FileHeader();
 		header.version = _CurrVersion;
 		header.abFileCount = abFileCount;
 		header.Flag = flag;
+       // header.fileMapOffset = fileMapOffset;
+       // header.fileMapCount = fileMapCount;
 		header.SaveToStream(Stream);
 	}
+
+#if USE_FLATBUFFER
+    public static Offset<AssetBundleFlatBuffer.FileHeader> ExportFileHeader(FlatBufferBuilder builder, int abFileCount) {
+        FileHeader header = new FileHeader();
+        header.version = _CurrVersion;
+        header.abFileCount = abFileCount;
+        header.Flag = DependBinaryFile.FLAG_FLATBUFFER;
+        var offset = header.SaveToFlatBuffer(builder);
+        return offset;
+    }
+#endif
 
 	public static void ExportToABFileHeader(Stream stream, IDependBinary file, string bundleName)
 	{
@@ -192,12 +278,37 @@ public class DependBinaryFile
 		header.SaveToStream (stream);
 	}
 
-	public static void ExportToSubFile(Stream stream, string subFileName)
+#if USE_FLATBUFFER
+    public static Offset<AssetBundleFlatBuffer.AssetBundleFileHeader> ExportToABFileHeader(FlatBufferBuilder builder, IDependBinary file, string bundleName) {
+        ABFileHeader header = new ABFileHeader();
+        header.compressType = file.CompressType;
+        header.dependFileCount = file.DependFileCount;
+        header.isMainAsset = file.IsMainAsset;
+        header.isScene = file.IsScene;
+        header.subFileCount = file.SubFileCount;
+        header.abFileName = bundleName;
+        var offset = header.SaveToFlatBuffer(builder);
+        return offset;
+    }
+#endif
+
+	public static void ExportToSubFile(Stream stream, string subFileName, string shaderName = "")
 	{
 		SubFileInfo info = new SubFileInfo ();
 		info.fileName = subFileName;
-		info.SaveToStream (stream);
+        info.shaderName = shaderName;
+        info.SaveToStream (stream);
 	}
+
+#if USE_FLATBUFFER
+    public static Offset<AssetBundleFlatBuffer.SubFileInfo> ExportToSubFile(FlatBufferBuilder builder, string subFileName, string shaderName = "") {
+        SubFileInfo info = new SubFileInfo();
+        info.fileName = subFileName;
+        info.shaderName = shaderName;
+        var offset = info.SaveToFlatBuffer(builder);
+        return offset;
+    }
+#endif
 
 	public static void ExportToDependFile(Stream stream, string abFileName, int refCount)
 	{
@@ -207,8 +318,20 @@ public class DependBinaryFile
 		info.SaveToStream (stream);
 	}
 
+#if USE_FLATBUFFER
+    public static Offset<AssetBundleFlatBuffer.DependInfo> ExportToDependFile(FlatBufferBuilder builder, string abFileName, int refCount) {
+        DependInfo info = new DependInfo();
+        info.abFileName = abFileName;
+        info.refCount = refCount;
+        return info.SavetoFlatBuffer(builder);
+    }
 #endif
 
-	private static readonly string _CurrVersion = "_D01";
-	public static readonly int FLAG_UNCOMPRESS = 0x0;
+#endif
+
+    //private static readonly string _CurrVersion = "_D02";
+    //private static readonly string _D01Version = "_D01";]
+    private static readonly string _CurrVersion = "_D01";
+    public static readonly int FLAG_UNCOMPRESS = 0x0;
+    public static readonly int FLAG_FLATBUFFER = 0x1;
 }

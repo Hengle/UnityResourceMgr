@@ -38,7 +38,9 @@ namespace AutoUpdate
 	{
 		public override void Enter(AutoUpdateMgr target)
 		{
+			target.HttpRelease();
 			target.DownProcess = 1.0f;
+			target.CurDownM = target.TotalDownM;
 		}
 	}
 
